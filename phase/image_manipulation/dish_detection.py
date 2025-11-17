@@ -119,17 +119,20 @@ def detect_dishes(
     dict
         Metadata.
     """
+    if (save and not save_path) or (debug and not save_path):
+        warnings.warn(f"No specified save path. Images saved in the current directory ({os.getcwd()}) under ...Dishes.")
+
     dishes, masks, coordinates = [], [], []
 
     img = read_img(source=source)
     gray_img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
-    if (save and not save_path) or (debug and not save_path):
-        warnings.warn(f"No specified save path. Images saved in the current directory ({os.getcwd()}) under ...Dishes.")
+    clahe_obj = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    clahed = clahe_obj.apply(gray_img)
 
     save_path_dish_detection = os.path.join(save_path, "Dishes") # path for dish crops
 
-    blur = cv.medianBlur(gray_img, 21) # blur so that hough circles doesn't detect random stuff
+    blur = cv.medianBlur(clahed, 21) # blur so that hough circles doesn't detect random stuff
 
     circles = cv.HoughCircles( # creates a numpy array of detected circles
         blur, # image, should be grayscale
