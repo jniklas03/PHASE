@@ -28,3 +28,5 @@ dist/
 Optuna Studies
 tuning.py
 watershed.py
+data/Save/*
+
