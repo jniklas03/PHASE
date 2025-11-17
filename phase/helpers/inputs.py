@@ -3,6 +3,7 @@ import re
 from pypdf import PdfReader
 from datetime import datetime
 import sys
+from pathlib import Path
 
 def read_img(source):
     """
@@ -21,7 +22,7 @@ def read_img(source):
     np.ndarray
         Image in numpy array form.
     """
-    if isinstance(source, str) and os.path.isfile(source):
+    if (isinstance(source, (str, Path)) and os.path.isfile(source)):
         img = cv.imread(source)
     elif isinstance(source, np.ndarray):
         img = source
@@ -119,7 +120,7 @@ def read_pdf(
         String of a path to where the detected images should be saved.
     file_name: str, default = "from_pdf"
         String of the file name the images should be saved as.
-    regex_name_pattern: str, default = r"(WT\s*\d+\s+P\s*\d+)"
+    regex_name_pattern: str, default = r"(WT\\s*\\d+\\s+P\\s*\\d+)"
         Regular expression pattern of the dish naming scheme.
 
     Returns
