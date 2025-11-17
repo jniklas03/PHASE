@@ -5,32 +5,6 @@ import warnings
 
 from ..helpers.inputs import read_img, show_image
 
-def separate_components(
-        source,
-        th,
-        kernel_size=3,
-        max_dist = 0.7
-        ):
-    source = read_img(source)
-    th = cv.cvtColor(read_img(th), cv.COLOR_BGR2GRAY)
-
-    # Perform connected component labeling
-    n_labels, labels, stats, centroids = cv.connectedComponentsWithStats(th, connectivity=4)
-
-    # Create false color image and color background black
-    colors = np.random.randint(0, 255, size=(n_labels, 3), dtype=np.uint8)
-    colors[0] = [0, 0, 0]  # for cosmetic reason we want the background black
-    false_colors = colors[labels]
-
-    # Label area of each polygon
-    false_colors_area = false_colors.copy()
-    for i, centroid in enumerate(centroids[1:], start=1):
-        area = stats[i, 4]
-        cv.putText(false_colors_area, str(area), (int(centroid[0]), int(centroid[1])), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
-
-    cv.imshow('false_colors_area', false_colors_area)
-    cv.waitKey()
-
 def preprocess(
         source,
         mask = None,
@@ -113,7 +87,7 @@ def preprocess(
                 filtered[labels == i] = 255
     else:
         filtered = threshold
-        separate_components()
+        # watershed here?
 
     # "crops" the outside of the dish if mask is passed
     if mask is not None:
