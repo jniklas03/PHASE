@@ -1,12 +1,9 @@
-PATH = r"C:\Users\jakub\Documents\Bachelorarbeit\Resources\Sources\27.10.2025"
-IMG = r"C:\Users\jakub\Documents\Bachelorarbeit\Resources\Sources\22.09.2025.jpg"
-SAVE = r"C:\Users\jakub\Documents\Bachelorarbeit\Resources\Timelapse_test"
+from phase import timelapse_pipeline
+from test_paths import *
 
-import phase
-
-phase.timelapse_pipeline(
-    PATH, 
-    True,
-    SAVE, 
+timelapse_pipeline(
+    source=TIMELAPSE, 
+    save_intermediates=True,
+    save_path=SAVE_PATH, 
     plot=True
 )
