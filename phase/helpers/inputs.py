@@ -77,23 +77,20 @@ def read_image_paths(directory):
     list
         List of base names of images.
     """
-    if not isinstance(directory, str) or not os.path.isdir(directory):
-        raise TypeError("directory must be a string of directory path.")
+    directory = Path(directory)
+
+    if not directory.is_dir():
+        raise TypeError("directory must be a string of directory path (str or Path).")
     
     valid_extensions = {".jpg", ".jpeg", ".png"}
     
     image_paths = []
     base_names = []
 
-    for img in sorted(os.listdir(directory)): # sorts all entries from given directory
-
-        full_path = os.path.join(directory, img) # grabs full path
-
-        # checks if entry is a file and contains a valid extension
-        if os.path.isfile(full_path) and os.path.splitext(img.lower())[1] in valid_extensions:
-
-            image_paths.append(full_path)
-            base_names.append(os.path.splitext(img)[0])
+    for item in sorted(directory.iterdir()): # sorts all entries from given directory
+        if item.is_file() and item.suffix.lower() in valid_extensions:
+            image_paths.append(item)
+            base_names.append(item.stem)
 
     return image_paths, base_names
 
