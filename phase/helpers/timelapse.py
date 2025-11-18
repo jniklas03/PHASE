@@ -12,16 +12,18 @@ def make_masks(
         n_to_stack=5
 ):
     """
-    Makes foreground and background masks from a given 
+    Makes foreground and background masks from a given image
     """
     # FOREGROUND MASKING
+    
+    last_image_path = image_paths[-1]
 
-    last_image_path = image_paths[-1] # last image used for a foreground mask
-
-    dishes, masks, coordinates, _ = detect_dishes( # dish crops from last image
+    dishes, masks, coordinates, _ = detect_dishes( # dish crops from first image
         source=last_image_path,
         file_name=os.path.basename(last_image_path),
-        save=False
+        save=False,
+        save_path=save_path,
+        debug=False
     )
 
     file_name = os.path.splitext(os.path.basename(last_image_path))[0]
@@ -29,7 +31,8 @@ def make_masks(
 
     if save:
         for idx, mask in enumerate(foreground_masks):
-            cv.imwrite(os.path.join(save_path, f"fg_mask{idx+1}.png"), mask)
+            os.makedirs(os.path.join(save_path, "Masks"), exist_ok=True)
+            cv.imwrite(os.path.join(save_path, "Masks", f"fg_mask{idx+1}.png"), mask)
 
     # BACKGROUND MASKING
     first_n_image_paths = image_paths[:n_to_stack] # grabs the first n images
@@ -51,10 +54,12 @@ def make_masks(
         for idx, img in enumerate(group):
             stack = cv.bitwise_or(stack, img)
             if save:
-                cv.imwrite(os.path.join(save_path, f"bg_mask_dish{i+1}_{idx+1}.png"), img)
+                os.makedirs(os.path.join(save_path, "Masks"), exist_ok=True)
+                cv.imwrite(os.path.join(save_path, "Masks", f"bg_mask_dish{i+1}_{idx+1}.png"), img)
         background_masks.append(stack)
         if save:
-            cv.imwrite(os.path.join(save_path, f"bg_mask_dish{i+1}_stack.png"), stack)
+            os.makedirs(os.path.join(save_path, "Masks"), exist_ok=True)
+            cv.imwrite(os.path.join(save_path, "Masks", f"bg_mask_dish{i+1}_stack.png"), stack)
 
     return foreground_masks, background_masks, coordinates
 
