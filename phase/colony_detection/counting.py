@@ -57,7 +57,7 @@ def detect_colonies(
     params.thresholdStep = 1 # Smaller values = more true positives
 
     params.filterByArea = True # Area in pxs
-    params.minArea = 2
+    params.minArea = 1
     params.maxArea = 750
 
     params.filterByColor = True
