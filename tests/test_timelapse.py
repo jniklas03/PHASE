@@ -5,5 +5,7 @@ timelapse_pipeline(
     source=TIMELAPSE_ACEGLU, 
     save_intermediates=True,
     save_path=SAVE_PATH, 
-    plot=True
+    plot=True,
+    use_masks=False,
+    fine_buffer=0
 )
