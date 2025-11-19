@@ -123,18 +123,26 @@ def timelapse_pipeline(
         save_path = "",
         n_to_stack = 5,
         plot = False,
-        fine_buffer = 3
+        fine_buffer = 3,
+        use_masks = True
 ):
     kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (3, 3))
 
     image_paths, file_names = read_image_paths(source)
 
-    fg_masks, bg_masks, coordinates = make_masks(
-        image_paths=image_paths,
-        save_path=save_path,
-        save=save_intermediates,
-        n_to_stack=n_to_stack
-    )
+    if use_masks:
+        fg_masks, bg_masks, coordinates = make_masks(
+            image_paths=image_paths,
+            save_path=save_path,
+            save=save_intermediates,
+            n_to_stack=n_to_stack
+        )
+    else:
+        _, _, coordinates, _ = detect_dishes(
+            source=image_paths[-1],
+            save=save_intermediates,
+            save_path=save_path
+        )
 
     if plot:
         fig, ax = init_plot()
@@ -171,8 +179,8 @@ def timelapse_pipeline(
 
             preprocessed = preprocess(source=dish,
                         mask=mask,
-                        fg_mask=fg_masks[idx],
-                        bg_mask=bg_masks[idx],
+                        fg_mask=fg_masks[idx] if use_masks else None,
+                        bg_mask=bg_masks[idx] if use_masks else None,
                         area_filter=dish_states[idx].fine,
                         file_name=file_name,
                         save=save_intermediates,
