@@ -8,6 +8,9 @@ def init_plot():
     """
     plt.ion()
 
+    plt.rcParams["font.family"] = "Helvetica"
+    plt.rcParams.update({"font.size":15})
+
     fig, ax = plt.subplots(figsize=(8,5))
 
     ax.set_xlabel("Time (hours)")
@@ -22,11 +25,14 @@ def update_live_plot(dish_counts, fig, ax):
     """
     ax.clear()
 
+    plt.rcParams["font.family"] = "Helvetica"
+    plt.rcParams.update({"font.size":15})
+
     for dish_idx in sorted(dish_counts.keys()):
         times  = [t[0] for t in dish_counts[dish_idx]]
         counts = [t[1] for t in dish_counts[dish_idx]]
 
-        ax.scatter(times, counts, label=f"Dish {dish_idx+1}")
+        ax.scatter(times, counts,label=f"Dish {dish_idx+1}")
 
     ax.set_xlabel("Time (hours)")
     ax.set_ylabel("Colony count")
