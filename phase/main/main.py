@@ -202,4 +202,4 @@ def timelapse_pipeline(
         plt.ioff()
         plt.show()
     
-    return(None)
+    return(dish_states)
