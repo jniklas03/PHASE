@@ -83,3 +83,9 @@ def check_state(dish_states, window=3, threshold=10):
         if sum(count > threshold for count in counts) >= 2:
             if counts[-1] > counts[-2]:
                 state.trigger()
+
+class Colony:
+    def __init__(self):
+        self.label = -1
+        self.centroid = (0,0,0)
+        self.growth_rate = 0

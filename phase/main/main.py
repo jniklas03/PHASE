@@ -4,7 +4,7 @@ import os
 import yaml
 import matplotlib.pyplot as plt
 
-from ..helpers.timelapse import make_masks, DishState, check_state
+from ..helpers.timelapse import make_masks, DishState, check_state, Colony
 from ..helpers.inputs import read_time, read_image_paths
 from ..helpers.plotting import init_plot, update_live_plot
 
