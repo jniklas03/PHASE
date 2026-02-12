@@ -23,50 +23,19 @@ class Frame:
         if self.image is None:
             self.image = read_img(self.image_path)
     
-    def generate_dishes(
-            self,
-            save: bool = False,
-            save_path: Path | str = "",
-            debug: bool = False
-    ):
+    def populate_frame(self):
         self.load_image()
 
-        self.dishes = dish_generation(
-            source=self.image,
-            save=save,
-            save_path=save_path,
-            file_name=self.name,
-            debug=debug
-        )
+        self.dishes = dish_pipeline(source=self.image)
     
-    def generate_dishes_from_crop(self, stencils):
+    def populate_frame_from_crop(self, stencils):
         self.load_image()
 
-        crops = dish_cropping(self.image, stencils)
+        self.dishes = crop_dishes(self.image, stencils)
 
-        for stencil, crop in zip(stencils, crops):
-            self.dishes = [
-                Dish(
-                    label=stencil.label,
-                    centroid=stencil.centroid,
-                    radius=stencil.radius,
-                    crop=crop
-                )
-            ]
-
-def dish_detection(img: np.ndarray) -> list[Dish]:
+def detect_dishes(img: np.ndarray) -> list[Dish]:
     """
-    Detects circular dishes in an image using Hough Circle Transform.
 
-    Parameters
-    ----------
-    source: str or np.ndarray
-        Raw image, or string of the image path.
-
-    Returns
-    -------
-    list of Dish
-        List of Dish objects with centroid and radius filled.
     """
     gray_img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
@@ -104,22 +73,12 @@ def dish_detection(img: np.ndarray) -> list[Dish]:
 
     return dishes
 
-def dish_sorting(dishes: list[Dish], row_tolerance=100) -> list[Dish]:
+def sort_dishes(dishes: list[Dish], row_tolerance=100) -> list[Dish]:
     """
-    Sorts detected dishes from top left to bottom right.
 
-    Parameters:
-    dishes: list of class(Dish)
-    row_tolerance: int
-        Value for how strictly dishes should be grouped together in a row (in pixels).
-
-    Returns
-    -------
-    list of class(Dish)
-        Sorted dishes.
     """
     if not dishes:
-        warnings.warn("Dishes list empty!")
+        warnings.warn("Dish list empty!")
         return []
 
     dishes = sorted(dishes, key=lambda d: d.centroid[1])
@@ -136,7 +95,6 @@ def dish_sorting(dishes: list[Dish], row_tolerance=100) -> list[Dish]:
     rows.append(current_row)
 
     sorted_dishes = []
-
     for row in rows:
         row.sort(key=lambda d: d.centroid[0])
         sorted_dishes.extend(row)
@@ -146,7 +104,7 @@ def dish_sorting(dishes: list[Dish], row_tolerance=100) -> list[Dish]:
 
     return sorted_dishes
 
-def dish_cropping(source, stencils: list[Dish]) -> list[Dish]:
+def crop_dishes(source: np.ndarray, stencils: list[Dish]) -> list[Dish]:
     """
     Crops around dishes in an image.
 
@@ -164,9 +122,10 @@ def dish_cropping(source, stencils: list[Dish]) -> list[Dish]:
     """
 
     img = read_img(source)
-    crops = []
 
-    for stencil in stencils:
+    dishes = []
+
+    for idx, stencil in enumerate(stencils):
         x, y = stencil.centroid
         r = stencil.radius
 
@@ -185,16 +144,18 @@ def dish_cropping(source, stencils: list[Dish]) -> list[Dish]:
         x2, y2 = min(img.shape[1], x+r), min(img.shape[0], y+r)
 
         crop = masked_img[y1:y2, x1:x2]
-        crops.append(crop)
 
-    return crops
+        dishes.append(Dish(
+            label=idx,
+            centroid=(x,y),
+            radius=r,
+            crop=crop)
+            )
+        
+    return dishes
 
-def dish_generation(
-        source,
-        save=True,
-        save_path = "",
-        file_name = "dish_detected", 
-        debug = False
+def dish_pipeline(
+        source
 ):
     """
     Detects dishes in an image, sorts them correctly, and crops around them.
@@ -217,57 +178,16 @@ def dish_generation(
     list of Dish
         List of Dish objects with crop and label attributes filled.
     """
-    if (save or debug) and not os.path.isdir(save_path):
-        save_path = ""
-        warnings.warn(f"No specified save path. Images saved in the current directory ({os.getcwd()}) under ...Dishes.")
-
-    save_path = os.path.join(save_path, "Dishes") # path for dish crops
-
     img = read_img(source)
 
-    dishes = dish_detection(img)
+    dishes = detect_dishes(img)
 
-    print(f"{len(dishes)} dishes detected in file: {file_name}.")
 
     if not dishes:
         return []
 
-    dishes = dish_sorting(dishes)
+    dishes = sort_dishes(dishes)
 
-    dishes = dish_cropping(img, dishes)
-
-    if debug:
-        debug_img = img.copy()
-
-        for dish in dishes:
-            x,y = dish.centroid
-            r = dish.radius
-
-            cv.circle(debug_img, (x, y), r, (0, 255, 0), 4)  # draws outline
-            cv.circle(debug_img, (x, y), 10, (0, 0, 255), -1)  # draws center point
-
-            cv.putText( # draws number label
-                debug_img,
-                str(dish.label),
-                (x - 40, y - 40),
-                cv.FONT_HERSHEY_SIMPLEX,
-                2,
-                (255, 0, 0),
-                3,
-            )
-
-        os.makedirs(save_path, exist_ok=True)
-
-        cv.imwrite(
-            os.path.join(save_path, f"{file_name}_debug.png"),
-            debug_img,
-        )
-
-    if save:
-        os.makedirs(save_path, exist_ok=True)
-
-        for dish in dishes:
-            save_name = f"{file_name}_dish_{dish.label}.png"
-            cv.imwrite(os.path.join(save_path, save_name), dish.crop)
+    dishes = crop_dishes(img, dishes)
 
     return dishes
