@@ -69,10 +69,7 @@ def preprocessing(
         C = 11,
         use_area_filter = True,
         min_area = 5,
-        max_area = 200,
-        save = False,
-        save_path = "",
-        file_name = "preprocessed",
+        max_area = 200
         ):
     """
     Preprocesses input image of cropped dish into a thresholded binary image of colonies.
@@ -109,9 +106,6 @@ def preprocessing(
     """
     img = read_img(source=source)
 
-    if save and not save_path:
-        warnings.warn(f"No specified save path. Images saved in the current directory ({os.getcwd()}) under ...Preprocessing.")
-
     # isolating green channel
     green_channel = img[:, :, 1]
 
@@ -138,23 +132,11 @@ def preprocessing(
         filtered = threshold
         # watershed here?
 
-    # saving
-    label = f"{source.label}" if hasattr(source, "label") else None
-    save_name = f"{file_name}_preprocessed_{label}.png" if label is not None else f"{file_name}_preprocessed.png"
-
-    if save:
-        save_path_preprocessing = os.path.join(save_path, "Preprocessing")
-        os.makedirs(save_path_preprocessing, exist_ok=True)
-        cv.imwrite(os.path.join(save_path_preprocessing, save_name), filtered)
-
-    print(f"File {save_name} preprocessed.")
+    return filtered
 
 def fg_isolation(
         source,
-        kernel_size = 500,
-        save = False,
-        save_path = "",
-        file_name = "preprocessed",
+        kernel_size = 500
         ):
     """
     Preprocesses input image of cropped dish into a thresholded binary image. 
@@ -184,9 +166,6 @@ def fg_isolation(
     """
     img = read_img(source=source)
 
-    if save and not save_path:
-        warnings.warn(f"No specified save path. Images saved in the current directory ({os.getcwd()}) under ...Preprocessing.")
-
     green_channel = img[:, :, 1]
 
     blur = cv.medianBlur(green_channel, 5)
@@ -197,16 +176,6 @@ def fg_isolation(
 
     _, threshold = cv.threshold(tophat, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU)
 
-    # saving
-    label = f"{source.label}" if hasattr(source, "label") else None
-    save_name = f"{file_name}_preprocessed_{label}.png" if label is not None else f"{file_name}_preprocessed.png"
-
-    if save:
-        save_path_preprocessing = os.path.join(save_path, "Preprocessing")
-        os.makedirs(save_path_preprocessing, exist_ok=True)
-        cv.imwrite(os.path.join(save_path_preprocessing, save_name), threshold)
-    print(f"File {save_name} preprocessed.")
-
     return threshold
 
 def bg_isolation(
@@ -215,10 +184,7 @@ def bg_isolation(
         C = 11,
         kernel_size = 3,
         min_area = 5,
-        max_area = 200,
-        save=False,
-        save_path = "",
-        file_name = "preprocessed",
+        max_area = 200
         ):
     """
     Preprocesses input image of cropped dish into a thresholded binary image. 
@@ -251,9 +217,6 @@ def bg_isolation(
         Preprocessed dish.
     """
     img = read_img(source=source)
-    
-    if save and not save_path:
-        warnings.warn(f"No specified save path. Images saved in the current directory ({os.getcwd()}) under ...Preprocessing.")
 
     green_channel = img[:, :, 1]
 
@@ -276,15 +239,5 @@ def bg_isolation(
 
     kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (kernel_size, kernel_size))
     opened = cv.morphologyEx(filtered, cv.MORPH_OPEN, kernel)
-
-    # saving
-    label = f"{source.label}" if hasattr(source, "label") else None
-    save_name = f"{file_name}_preprocessed_{label}.png" if label is not None else f"{file_name}_preprocessed.png"
-
-    if save:
-        save_path_preprocessing = os.path.join(save_path, "Preprocessing")
-        os.makedirs(save_path_preprocessing, exist_ok=True)
-        cv.imwrite(os.path.join(save_path_preprocessing, save_name), opened)
-    print(f"File {save_name} preprocessed.")
 
     return opened
