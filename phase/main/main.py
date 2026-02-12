@@ -4,12 +4,11 @@ import os
 import yaml
 import matplotlib.pyplot as plt
 
-from ..helpers.timelapse import make_masks, DishState, check_state, Colony
 from ..helpers.inputs import read_time, read_image_paths
 from ..helpers.plotting import init_plot, update_live_plot
 
 from ..image_manipulation.preprocessing import preprocess, preprocess_fg_isolation
-from ..image_manipulation.dish_detection import detect_dishes, crop
+from ..image_manipulation.dish_detection import generate_dishes, crop_dishes
 
 from ..colony_detection.counting import detect_colonies
 
@@ -50,7 +49,7 @@ def pipeline(
 
     metadata = {file_name: {}}
 
-    dishes, masks, coordinates, dish_metadata = detect_dishes(
+    dishes, masks, coordinates, dish_metadata = generate_dishes(
         source=img,
         save=save_dishes,
         save_path=save_path,
@@ -64,7 +63,7 @@ def pipeline(
         preprocessed.append(preprocess(
             source=dish,
             mask=masks[idx],
-            area_filter=False,
+            use_area_filter=False,
             save=save_preprocessed,
             save_path=save_path,
             file_name=file_name,
@@ -138,7 +137,7 @@ def timelapse_pipeline(
             n_to_stack=n_to_stack
         )
     else:
-        _, _, coordinates, _ = detect_dishes(
+        _, _, coordinates, _ = generate_dishes(
             source=image_paths[-1],
             save=save_intermediates,
             save_path=save_path
@@ -168,7 +167,7 @@ def timelapse_pipeline(
 
         # cropping and preprocessing
 
-        dishes, masks = crop(img_path, coordinates)
+        dishes, masks = crop_dishes(img_path, coordinates)
 
         # going through each dish and applying preprocessing and masks, dependant on growth state
 
@@ -181,7 +180,7 @@ def timelapse_pipeline(
                         mask=mask,
                         fg_mask=fg_masks[idx] if use_masks else None,
                         bg_mask=bg_masks[idx] if use_masks else None,
-                        area_filter=dish_states[idx].fine,
+                        use_area_filter=dish_states[idx].fine,
                         file_name=file_name,
                         save=save_intermediates,
                         save_path=save_path,

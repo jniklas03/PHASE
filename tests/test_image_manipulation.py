@@ -6,7 +6,7 @@ SOURCE = RAW1
 
 file_name = os.path.splitext(os.path.basename(SOURCE))[0]
 
-dishes, masks, coordinates, metadata = phase.detect_dishes(
+dishes, masks, coordinates, metadata = phase.generate_dishes(
     source=SOURCE,
     save_path=SAVE_PATH,
     file_name=file_name,

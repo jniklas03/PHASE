@@ -1,25 +1,78 @@
+from dataclasses import dataclass
+
 import cv2 as cv
 import numpy as np
 import os
 import warnings
 
-from ..helpers.inputs import read_img, show_image
+from ..helpers.inputs import read_img
 
-def preprocess(
+@dataclass
+class Dish:
+    label: int | None
+    centroid: tuple[int, int]
+    radius: int
+    count: int = 0
+    colonies: list | None = None
+    crop: np.ndarray | None = None
+    preprocessed: np.ndarray | None = None
+
+    def _mask_from_crop(self) -> np.ndarray:
+        h, w = self.crop.shape[:2]
+        cx, cy = w // 2, h // 2
+
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv.circle(mask, (cx, cy), self.radius, 255, -1)
+
+        return mask
+    
+    def isolate_fg(self):
+        mask = self._mask_from_crop()
+
+        preprocessed = fg_isolation(self.crop)
+
+        cropped = cv.bitwise_and(preprocessed, preprocessed, mask=mask)
+
+        return cropped
+
+    def isolate_bg(self):
+        mask = self._mask_from_crop()
+
+        preprocessed = bg_isolation(self.crop)
+
+        cropped = cv.bitwise_and(preprocessed, preprocessed, mask=mask)
+
+        return cropped
+
+    def preprocess(self, fg_mask, bg_mask, use_bg_sep = True, kernel_size = 3, use_area_filter = True):
+        # flipping the outside of the dish
+        mask = self._mask_from_crop()
+
+        preprocessed = preprocessing(self.crop, use_area_filter=use_area_filter)
+
+        cropped = cv.bitwise_and(preprocessed, preprocessed, mask=mask)
+
+        if use_bg_sep:
+            fg_masked = cv.bitwise_and(cropped, cropped, mask=fg_mask)
+            bg_masked = cv.bitwise_and(fg_masked, fg_masked, mask=cv.bitwise_not(bg_mask))
+            
+            kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (kernel_size, kernel_size))
+            eroded = cv.morphologyEx(bg_masked, cv.MORPH_ERODE, kernel)
+
+            return eroded
+
+        return cropped
+
+def preprocessing(
         source,
-        mask = None,
-        fg_mask = None,
-        bg_mask = None,
-        area_filter = True,
         s = 121,
         C = 11,
-        kernel_size = 3,
+        use_area_filter = True,
         min_area = 5,
         max_area = 200,
         save = False,
         save_path = "",
         file_name = "preprocessed",
-        idx: int = None
         ):
     """
     Preprocesses input image of cropped dish into a thresholded binary image of colonies.
@@ -30,8 +83,6 @@ def preprocess(
     ----------
     source: str or np.ndarray
         Image of dish, or string to the image path.
-    mask: np.ndarray, optional
-        Mask of background area outside of dish, if None the background crop won't be applied and watershedding won't work.
     fg_mask: np.ndarray, optional
         "Ground truth positive" mask of colonies from a time point in the future. From preprocess_fg_isolation()
     bg_mask: np.ndarray, optional
@@ -49,9 +100,7 @@ def preprocess(
     save_path: str, optional
         Path where the image should be saved.
     file_name: str, optional
-        Name to save the preprocessed image as.
-    idx: int, optional
-        Passed by a wrapper function when processing mutliple dishes.    
+        Name to save the preprocessed image as. 
     
     Returns
     -------
@@ -77,7 +126,7 @@ def preprocess(
     )
 
     # area filter if area_filter flag is passed, otherwise watershed
-    if area_filter:
+    if use_area_filter:
         num_labels, labels, stats, _ = cv.connectedComponentsWithStats(threshold, connectivity=8)
         filtered = np.zeros_like(threshold)
 
@@ -89,44 +138,23 @@ def preprocess(
         filtered = threshold
         # watershed here?
 
-    # "crops" the outside of the dish if mask is passed
-    if mask is not None:
-        cropped = cv.bitwise_and(filtered, filtered, mask=mask)
-    else:
-        cropped = filtered
-
-    # applies fg_mask and bg_mask if passed
-    if fg_mask is not None:
-            masked1 = cv.bitwise_and(cropped, cropped, mask=fg_mask)
-    if bg_mask is not None:
-            masked2 = cv.bitwise_and(masked1, masked1, mask=cv.bitwise_not(bg_mask))
-    else:
-        masked2 = cropped
-    
-    # erosion
-    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (kernel_size, kernel_size))
-    eroded = cv.morphologyEx(masked2, cv.MORPH_ERODE, kernel)
-
     # saving
-    save_name = f"{file_name}_preprocessed_{idx}.png" if idx is not None else f"{file_name}_preprocessed.png"
+    label = f"{source.label}" if hasattr(source, "label") else None
+    save_name = f"{file_name}_preprocessed_{label}.png" if label is not None else f"{file_name}_preprocessed.png"
 
     if save:
         save_path_preprocessing = os.path.join(save_path, "Preprocessing")
         os.makedirs(save_path_preprocessing, exist_ok=True)
-        cv.imwrite(os.path.join(save_path_preprocessing, save_name), eroded)
+        cv.imwrite(os.path.join(save_path_preprocessing, save_name), filtered)
 
     print(f"File {save_name} preprocessed.")
 
-    return eroded
-
-def preprocess_fg_isolation(
+def fg_isolation(
         source,
-        mask = None,
         kernel_size = 500,
         save = False,
         save_path = "",
         file_name = "preprocessed",
-        idx: int = None
         ):
     """
     Preprocesses input image of cropped dish into a thresholded binary image. 
@@ -148,8 +176,6 @@ def preprocess_fg_isolation(
         Path to directory where the image is saved.
     file_name: str, optional
         Name to save the preprocessed image as.
-    idx: int, optional
-        Passed by a wrapper function when processing mutliple dishes.  
 
     Returns
     -------
@@ -171,10 +197,9 @@ def preprocess_fg_isolation(
 
     _, threshold = cv.threshold(tophat, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU)
 
-    if mask is not None:
-        threshold = cv.bitwise_and(threshold, threshold, mask=mask)
-
-    save_name = f"{file_name}_p{idx}.png" if idx is not None else f"{file_name}_p.png"
+    # saving
+    label = f"{source.label}" if hasattr(source, "label") else None
+    save_name = f"{file_name}_preprocessed_{label}.png" if label is not None else f"{file_name}_preprocessed.png"
 
     if save:
         save_path_preprocessing = os.path.join(save_path, "Preprocessing")
@@ -184,9 +209,8 @@ def preprocess_fg_isolation(
 
     return threshold
 
-def preprocess_bg_isolation(
+def bg_isolation(
         source,
-        mask,
         s = 121,
         C = 11,
         kernel_size = 3,
@@ -195,7 +219,6 @@ def preprocess_bg_isolation(
         save=False,
         save_path = "",
         file_name = "preprocessed",
-        idx: int = None
         ):
     """
     Preprocesses input image of cropped dish into a thresholded binary image. 
@@ -221,8 +244,6 @@ def preprocess_bg_isolation(
         Path to directory where the image is saved.
     file_name: str, optional
         Name to save the preprocessed image as.
-    idx: int, optional
-        Passed by a wrapper function when processing mutliple dishes.  
 
     Returns
     -------
@@ -230,7 +251,7 @@ def preprocess_bg_isolation(
         Preprocessed dish.
     """
     img = read_img(source=source)
-
+    
     if save and not save_path:
         warnings.warn(f"No specified save path. Images saved in the current directory ({os.getcwd()}) under ...Preprocessing.")
 
@@ -256,17 +277,14 @@ def preprocess_bg_isolation(
     kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (kernel_size, kernel_size))
     opened = cv.morphologyEx(filtered, cv.MORPH_OPEN, kernel)
 
-    if mask is not None:
-        filtered = cv.bitwise_and(opened, opened, mask=mask)
-    else:
-        filtered = opened
-
-    save_name = f"{file_name}_p{idx}.png" if idx is not None else f"{file_name}_p.png"
+    # saving
+    label = f"{source.label}" if hasattr(source, "label") else None
+    save_name = f"{file_name}_preprocessed_{label}.png" if label is not None else f"{file_name}_preprocessed.png"
 
     if save:
         save_path_preprocessing = os.path.join(save_path, "Preprocessing")
         os.makedirs(save_path_preprocessing, exist_ok=True)
-        cv.imwrite(os.path.join(save_path_preprocessing, save_name), filtered)
+        cv.imwrite(os.path.join(save_path_preprocessing, save_name), opened)
     print(f"File {save_name} preprocessed.")
 
-    return filtered
+    return opened
