@@ -196,10 +196,38 @@ class Timeseries:
                     use_area_filter=use_area_filter
                 )
 
+    def init_colonies(self):
+        for dish in self.frames[0].dishes:
+            blobs = dish.detect_colonies()
+
+            colonies = []
+        
+            for blob in blobs:
+                colony = Colony(
+                    centroid=(int(blob.pt[0]), int(blob.pt[1])),
+                    radius=int(blob.size / 2),
+                    growth_rate=0,
+                    state="temp"
+                )
+                colonies.append(colony)
+
+            dish.colonies = colonies            
+            dish.count = len(dish.colonies)
+
     def detect_timeseries_old(self):
         for frame in tqdm(self.frames, desc="Detecting colonies"):
             for dish in frame.dishes:
-                dish.init_colonies(old=True)
+                blobs = dish.detect_colonies()
+
+                for blob in blobs:
+                    colony = Colony(
+                        centroid=(int(blob.pt[0]), int(blob.pt[1])),
+                        radius=int(blob.size / 2),
+                        growth_rate=0
+                    )
+                    dish.colonies.append(colony)
+                
+                frame.count = len(dish.colonies)
 
     def export_images(self, save_path: str = ""):
         """
@@ -245,10 +273,10 @@ class Timeseries:
 
         for frame in self.frames:
             for dish in frame.dishes:
-                if dish.detected_old is not None:
-                    cv.imwrite(str(save_path / "colonies_old" / f"{frame.name}_dish{dish.label}.png"), dish.detected_old)
                 if dish.detected is not None:
-                    cv.imwrite(str(save_path / "colonies" / f"{frame.name}_dish{dish.label}.png"), dish.detected)
+                    cv.imwrite(str(save_path / "colonies_old" / f"{frame.name}_dish{dish.label}.png"), dish.detected)
+                if dish.tracked is not None:
+                    cv.imwrite(str(save_path / "colonies" / f"{frame.name}_dish{dish.label}.png"), dish.tracked)
 
         # fg/bg masks
         if self.fg_masks is not None:
@@ -259,7 +287,7 @@ class Timeseries:
             for label, mask in enumerate(self.bg_masks):
                 cv.imwrite(str(save_path / "bg_masks" / f"dish{label}.png"), mask)
     
-    def plot_counts(self, save_path: str = ""):
+    def plot_counts(self, save_path: str = "", file_name: str = "colony_counts.png"):
         assert self.frames, "Timeseries has no frames to plot."
 
         save_path = Path(save_path)
@@ -287,7 +315,7 @@ class Timeseries:
                 data["counts"],
                 marker='o',
                 color=colors[idx],
-                label=f"Dish {label}"
+                label=f"Dish {label+1}"
             )
 
         plt.xlabel('Time')
@@ -296,5 +324,5 @@ class Timeseries:
         plt.legend()
         plt.grid()
         plt.tight_layout()
-        plt.savefig(save_path / "plots" / "colony_counts.png")
+        plt.savefig(save_path / "plots" / file_name)
         plt.close()

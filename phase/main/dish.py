@@ -1,9 +1,7 @@
-from dataclasses import dataclass
-
+from dataclasses import dataclass, field
 
 import cv2 as cv
 import numpy as np
-import os
 import warnings
 
 from ..helpers.inputs import read_img
@@ -15,11 +13,11 @@ class Dish:
     radius: int
     label: int | None = None
     count: int | None = None
-    colonies: list[Colony] | None = None
+    colonies: list[Colony] = field(default_factory=list)
     crop: np.ndarray | None = None
     preprocessed: np.ndarray | None = None
-    detected_old: np.ndarray | None = None
     detected: np.ndarray | None = None
+    tracked: np.ndarray | None = None
 
     def _mask_from_crop(self) -> np.ndarray:
         h, w = self.crop.shape[:2]
@@ -72,30 +70,23 @@ class Dish:
 
         return result
     
-    def init_colonies(self, old=False):
+    def detect_colonies(self):
         assert self.preprocessed is not None, "Preprocessed image not found. Run preprocessing first."
+        
         if self.crop is None:
             warnings.warn("Crop not found. Using preprocessed image for visualisation.")
             blobs, output = colony_detection(self.preprocessed)
         else:
             blobs, output = colony_detection(self.preprocessed, raw_img=self.crop)
-
-        if old:
-            self.detected_old = output
-        else:
-            self.detected = output
-
-        self.colonies = []
         
-        for blob in blobs:
-            colony = Colony(
-                centroid=(int(blob.pt[0]), int(blob.pt[1])),
-                radius=int(blob.size / 2),
-                growth_rate=0
-            )
-            self.colonies.append(colony)
-        
-        self.count = len(self.colonies)
+        self.detected = output
+
+        return blobs
+    
+    def delete_colony(self, colony: Colony):
+        if self.colonies is not None:
+            self.colonies.remove(colony)
+
 
 def preprocessing(
         source,
