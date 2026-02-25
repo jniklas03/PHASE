@@ -1,21 +1,24 @@
 from dataclasses import dataclass
 
+
 import cv2 as cv
 import numpy as np
 import os
 import warnings
 
 from ..helpers.inputs import read_img
+from .colony import Colony
 
 @dataclass
 class Dish:
-    label: int | None
     centroid: tuple[int, int]
     radius: int
-    count: int = 0
-    colonies: list | None = None
+    label: int | None = None
+    count: int | None = None
+    colonies: list[Colony] | None = None
     crop: np.ndarray | None = None
     preprocessed: np.ndarray | None = None
+    detected: np.ndarray | None = None
 
     def _mask_from_crop(self) -> np.ndarray:
         h, w = self.crop.shape[:2]
@@ -44,7 +47,7 @@ class Dish:
 
         return cropped
 
-    def preprocess(self, fg_mask, bg_mask, use_bg_sep = True, kernel_size = 3, use_area_filter = True):
+    def preprocess_dish(self, fg_mask, bg_mask, use_bg_mask = True, use_fg_mask = False, kernel_size = 3, use_area_filter = True):
         # flipping the outside of the dish
         mask = self._mask_from_crop()
 
@@ -52,16 +55,43 @@ class Dish:
 
         cropped = cv.bitwise_and(preprocessed, preprocessed, mask=mask)
 
-        if use_bg_sep:
-            fg_masked = cv.bitwise_and(cropped, cropped, mask=fg_mask)
-            bg_masked = cv.bitwise_and(fg_masked, fg_masked, mask=cv.bitwise_not(bg_mask))
-            
+        result = cropped
+
+        if use_bg_mask or use_fg_mask:
             kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (kernel_size, kernel_size))
-            eroded = cv.morphologyEx(bg_masked, cv.MORPH_ERODE, kernel)
 
-            return eroded
+        if use_fg_mask:
+            result = cv.bitwise_and(result, result, mask=fg_mask)
+        
+        if use_bg_mask:
+            result = cv.bitwise_and(result, result, mask=cv.bitwise_not(bg_mask))
 
-        return cropped
+        if use_bg_mask or use_fg_mask:
+            result = cv.morphologyEx(result, cv.MORPH_ERODE, kernel)
+
+        return result
+    
+    def init_colonies(self):
+        assert self.preprocessed is not None, "Preprocessed image not found. Run preprocessing first."
+        if self.crop is None:
+            warnings.warn("Crop not found. Using preprocessed image for visualisation.")
+            blobs, output = colony_detection(self.preprocessed)
+        else:
+            blobs, output = colony_detection(self.preprocessed, raw_img=self.crop)
+
+        self.detected = output
+
+        self.colonies = []
+        
+        for blob in blobs:
+            colony = Colony(
+                centroid=(int(blob.pt[0]), int(blob.pt[1])),
+                radius=int(blob.size / 2),
+                growth_rate=0
+            )
+            self.colonies.append(colony)
+        
+        self.count = len(self.colonies)
 
 def preprocessing(
         source,
@@ -176,7 +206,11 @@ def fg_isolation(
 
     _, threshold = cv.threshold(tophat, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU)
 
-    return threshold
+    kernel_open = cv.getStructuringElement(cv.MORPH_ELLIPSE, (5,5))
+
+    opened = cv.morphologyEx(threshold, cv.MORPH_OPEN, kernel_open)
+
+    return opened
 
 def bg_isolation(
         source,
@@ -241,3 +275,70 @@ def bg_isolation(
     opened = cv.morphologyEx(filtered, cv.MORPH_OPEN, kernel)
 
     return opened
+
+def colony_detection(
+        source,
+        raw_img = None
+):
+    """
+    Detects colonies.
+
+    Returns number of colonies, image with detected colonies and metadata.
+
+    Parameters
+    ----------
+    source: str or np.ndarray
+        Thresholded image or string to the image path.
+    raw_img: np.ndarray, optional
+        Initial image, used for saving. If None, image from source will be used for visualisation.
+    save: bool, default=False
+        Whether to save the image with detected colonies.
+    save_path: str, optional
+        Path to directory where the image and metadata are saved.
+    file_name: str, optional
+        File name for the saved image.
+    metadata: dict, optional
+        Metadata dictionary handled by a wrapper function.
+    idx: int, optional
+        Passed by a wrapper function when processing mutliple dishes. 
+
+    Returns
+    -------
+    int
+        Number of detected colonies
+    np.ndarray
+        Image with detected colonies
+    """
+    img = read_img(source=source)
+
+    if raw_img is None:
+        raw_img = img
+
+    params = cv.SimpleBlobDetector_Params() # Values from hyperparameter tuning
+
+    params.minThreshold = 0
+    params.maxThreshold = 255 # Smaller values = less false positives
+    params.thresholdStep = 1 # Smaller values = more true positives
+
+    params.filterByArea = True # Area in pxs
+    params.minArea = 1
+    params.maxArea = 750
+
+    params.filterByColor = True
+    params.blobColor = 255 # Detects white colonies
+
+    params.filterByCircularity = True # how much does the geometrical shape fit the form of a circle
+    params.minCircularity = 0.1
+
+    params.filterByConvexity = True # "fullness" of the circle; think of a pie chart
+    params.minConvexity = 0.7
+
+    params.filterByInertia = True # how elongated is the circle - lower values mean more elongated.
+    params.minInertiaRatio = 0.1
+
+    detector = cv.SimpleBlobDetector_create(params) # Creates detector object
+    blobs = detector.detect(img) # Blobs are markers around colonies
+
+    output = cv.drawKeypoints(raw_img, blobs, np.array([]), (0,255,0), cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS) # Output = initial image with colonies marked
+
+    return blobs, output

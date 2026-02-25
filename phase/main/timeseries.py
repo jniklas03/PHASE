@@ -3,10 +3,18 @@ from collections import defaultdict
 from pathlib import Path
 import numpy as np
 import cv2 as cv
+from scipy.spatial import KDTree
+
+import matplotlib.pyplot as plt
+from matplotlib import animation
+from matplotlib.patches import Circle
+import matplotlib.patheffects as path_effects
+
 
 from ..helpers.inputs import read_time
 
 from .frame import Frame
+from .colony import Colony
 
 @dataclass
 class Timeseries:
@@ -157,28 +165,34 @@ class Timeseries:
         self.fg_masks = fg_masks
         self.bg_masks = bg_masks
 
-    def preprocess_timeseries(self, use_bg_sep = True, n=5):
+    def preprocess_timeseries(self, use_bg_mask = True, use_fg_mask = False, use_area_filter = False, n=5):
         """
         preprocess each dish for each frame
 
         parameters
         ----------
-        use_bg_sep : bool, optional
-            if true, use masks for foreground/background separation (default True)
+        use_bg_mask : bool, optional
+            if true, use background masks for preprocessing (default True)
+        use_fg_mask : bool, optional
+            if true, use foreground masks for preprocessing (default False)
+        use_area_filter : bool, optional
+            if true, use area filtering for preprocessing (default False)
         n : int, optional
             number of initial frames to compute fg/bg masks (default 5)
         """
-        if use_bg_sep:
+        if use_bg_mask or use_fg_mask:
             self.make_masks(n=n)
 
         for frame in self.frames:
             for dish in frame.dishes:
-                dish.preprocessed = dish.preprocess(
-                    fg_mask=self.fg_masks[dish.label] if use_bg_sep else None,
-                    bg_mask=self.bg_masks[dish.label] if use_bg_sep else None,
-                    use_bg_sep=use_bg_sep
+                dish.preprocessed = dish.preprocess_dish(
+                    fg_mask=self.fg_masks[dish.label] if use_fg_mask else None,
+                    bg_mask=self.bg_masks[dish.label] if use_bg_mask else None,
+                    use_bg_mask=use_bg_mask,
+                    use_fg_mask=use_fg_mask,
+                    use_area_filter=use_area_filter
                 )
-
+                
     def export_debug(self, root: str = ""):
         """
         export all images contained in a timeseries
