@@ -6,6 +6,9 @@ import cv2 as cv
 from scipy.spatial import KDTree
 
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from tqdm import tqdm
+
 from matplotlib import animation
 from matplotlib.patches import Circle
 import matplotlib.patheffects as path_effects
@@ -90,7 +93,7 @@ class Timeseries:
         
         valid_extensions = {".jpg", ".jpeg", ".png"}
         
-        for item in sorted(directory.iterdir()): # sorts all entries from given directory
+        for item in tqdm(sorted(directory.iterdir()), desc="Loading frames"): # sorts all entries from given directory
             if item.is_file() and item.suffix.lower() in valid_extensions:
                 timestamp = read_time(item.name)
 
@@ -121,11 +124,11 @@ class Timeseries:
             # use first frame as stencil for all frames
             stencils = self.frames[0].dishes
 
-            for frame in self.frames:
+            for frame in tqdm(self.frames, desc="Populating frames"):
                 frame.populate_frame_from_crop(stencils)
         else:
             # populate each frame independently
-            for frame in self.frames:
+            for frame in tqdm(self.frames, desc="Populating frames"):
                 frame.populate_frame()
     
     def make_masks(self, n=5):
@@ -139,21 +142,21 @@ class Timeseries:
         """
         # foreground mask from last frame
         fg_masks = []
-        for dish in self.frames[-1].dishes:
+        for dish in tqdm(self.frames[-1].dishes, desc="Making foreground masks"):
             fg_mask = dish.isolate_fg()
             fg_masks.append(fg_mask)
 
         # bg mask from first n frames
         frame_groups: dict[int, list[np.ndarray]] = defaultdict(list)
 
-        for frame in self.frames[:n]:
+        for frame in tqdm(self.frames[:n], desc="Making background masks"):
             for dish in frame.dishes:
                 preprocessed = dish.isolate_bg()
                 frame_groups[dish.label].append(preprocessed)
 
         bg_masks = []
 
-        for label in sorted(frame_groups):
+        for label in tqdm(sorted(frame_groups), desc="Aggregating background masks"):
             dishes = frame_groups[label]
             aggregate = np.zeros_like(dishes[0])
 
@@ -183,7 +186,7 @@ class Timeseries:
         if use_bg_mask or use_fg_mask:
             self.make_masks(n=n)
 
-        for frame in self.frames:
+        for frame in tqdm(self.frames, desc="Preprocessing frames"):
             for dish in frame.dishes:
                 dish.preprocessed = dish.preprocess_dish(
                     fg_mask=self.fg_masks[dish.label] if use_fg_mask else None,
@@ -192,8 +195,13 @@ class Timeseries:
                     use_fg_mask=use_fg_mask,
                     use_area_filter=use_area_filter
                 )
-                
-    def export_debug(self, root: str = ""):
+
+    def detect_timeseries_old(self):
+        for frame in tqdm(self.frames, desc="Detecting colonies"):
+            for dish in frame.dishes:
+                dish.init_colonies(old=True)
+
+    def export_images(self, save_path: str = ""):
         """
         export all images contained in a timeseries
 
@@ -202,13 +210,15 @@ class Timeseries:
         root : str
             base directory where images will be saved
         """
-        root = Path(root)
+        save_path = Path(save_path)
 
         # directories
-        (root / "dish_detection").mkdir(parents=True, exist_ok=True)
-        (root / "preprocessed").mkdir(parents=True, exist_ok=True)
-        (root / "fg_masks").mkdir(parents=True, exist_ok=True)
-        (root / "bg_masks").mkdir(parents=True, exist_ok=True)
+        (save_path / "dish_detection").mkdir(parents=True, exist_ok=True)
+        (save_path / "preprocessed").mkdir(parents=True, exist_ok=True)
+        (save_path / "colonies_old").mkdir(parents=True, exist_ok=True)
+        (save_path / "colonies").mkdir(parents=True, exist_ok=True)
+        (save_path / "fg_masks").mkdir(parents=True, exist_ok=True)
+        (save_path / "bg_masks").mkdir(parents=True, exist_ok=True)
 
         # debug overlay for first frame
         first_frame = self.frames[0]
@@ -223,21 +233,68 @@ class Timeseries:
             cv.putText(overlay, str(dish.label), (x - 40, y - 40),
                     cv.FONT_HERSHEY_SIMPLEX, 2, (255, 0, 0), 3)
 
-        cv.imwrite(str(root / "dish_detection" / f"{first_frame.name}_debug.png"), overlay)
+        cv.imwrite(str(save_path / "dish_detection" / f"{first_frame.name}_debug.png"), overlay)
 
         # crops and preprocessed
         for frame in self.frames:
             for dish in frame.dishes:
                 if dish.crop is not None:
-                    cv.imwrite(str(root / "dish_detection" / f"{frame.name}_dish{dish.label}.png"), dish.crop)
+                    cv.imwrite(str(save_path / "dish_detection" / f"{frame.name}_dish{dish.label}.png"), dish.crop)
                 if dish.preprocessed is not None:
-                    cv.imwrite(str(root / "preprocessed" / f"{frame.name}_dish{dish.label}.png"), dish.preprocessed)
+                    cv.imwrite(str(save_path / "preprocessed" / f"{frame.name}_dish{dish.label}.png"), dish.preprocessed)
+
+        for frame in self.frames:
+            for dish in frame.dishes:
+                if dish.detected_old is not None:
+                    cv.imwrite(str(save_path / "colonies_old" / f"{frame.name}_dish{dish.label}.png"), dish.detected_old)
+                if dish.detected is not None:
+                    cv.imwrite(str(save_path / "colonies" / f"{frame.name}_dish{dish.label}.png"), dish.detected)
 
         # fg/bg masks
         if self.fg_masks is not None:
             for label, mask in enumerate(self.fg_masks):
-                cv.imwrite(str(root / "fg_masks" / f"dish{label}.png"), mask)
+                cv.imwrite(str(save_path / "fg_masks" / f"dish{label}.png"), mask)
 
         if self.bg_masks is not None:
             for label, mask in enumerate(self.bg_masks):
-                cv.imwrite(str(root / "bg_masks" / f"dish{label}.png"), mask)
+                cv.imwrite(str(save_path / "bg_masks" / f"dish{label}.png"), mask)
+    
+    def plot_counts(self, save_path: str = ""):
+        assert self.frames, "Timeseries has no frames to plot."
+
+        save_path = Path(save_path)
+
+        (save_path / "plots").mkdir(parents=True, exist_ok=True)
+
+        first_frame = self.frames[0]
+
+        cmap = cm.get_cmap("tab10", len(first_frame.dishes))  
+        colors = [cmap(i) for i in range(len(first_frame.dishes))]
+
+        dish_data = {dish.label: {"times": [], "counts": []} for dish in first_frame.dishes}
+
+        for frame in self.frames:
+            for dish in frame.dishes:
+                count = len(dish.colonies) if dish.colonies is not None else 0
+                dish_data[dish.label]["times"].append(frame.timestamp)
+                dish_data[dish.label]["counts"].append(count)
+
+        plt.figure(figsize=(10, 6))
+
+        for idx, (label, data) in enumerate(dish_data.items()):
+            plt.plot(
+                data["times"],
+                data["counts"],
+                marker='o',
+                color=colors[idx],
+                label=f"Dish {label}"
+            )
+
+        plt.xlabel('Time')
+        plt.ylabel('Colony Count')
+        plt.title('Colony Counts Over Time')
+        plt.legend()
+        plt.grid()
+        plt.tight_layout()
+        plt.savefig(save_path / "plots" / "colony_counts.png")
+        plt.close()

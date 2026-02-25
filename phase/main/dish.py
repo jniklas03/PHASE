@@ -18,6 +18,7 @@ class Dish:
     colonies: list[Colony] | None = None
     crop: np.ndarray | None = None
     preprocessed: np.ndarray | None = None
+    detected_old: np.ndarray | None = None
     detected: np.ndarray | None = None
 
     def _mask_from_crop(self) -> np.ndarray:
@@ -71,7 +72,7 @@ class Dish:
 
         return result
     
-    def init_colonies(self):
+    def init_colonies(self, old=False):
         assert self.preprocessed is not None, "Preprocessed image not found. Run preprocessing first."
         if self.crop is None:
             warnings.warn("Crop not found. Using preprocessed image for visualisation.")
@@ -79,7 +80,10 @@ class Dish:
         else:
             blobs, output = colony_detection(self.preprocessed, raw_img=self.crop)
 
-        self.detected = output
+        if old:
+            self.detected_old = output
+        else:
+            self.detected = output
 
         self.colonies = []
         
