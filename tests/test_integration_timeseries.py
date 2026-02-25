@@ -3,7 +3,6 @@ import numpy as np
 from phase.main.timeseries import Timeseries
 from tests.data import TIMELAPSE
 
-
 def test_loading():
     ts = Timeseries.from_directory("test", TIMELAPSE)
     # tests if every image was loaded
@@ -46,8 +45,8 @@ def test_preprocessing(n=3):
     # checks if masks have been initialised and if they match the dishes
     assert ts.fg_masks is not None, "fg_mask empty"
     assert ts.bg_masks is not None, "bg_mask empty"
-    assert len(ts.fg_masks) == len(ts.frames[0].dishes), "mask length mismatch"
-    assert len(ts.bg_masks) == len(ts.frames[0].dishes), "mask length mismatch"
+    assert len(ts.fg_masks) == len(ts.frames[0].dishes), "Mask length mismatch"
+    assert len(ts.bg_masks) == len(ts.frames[0].dishes), "Mask length mismatch"
 
     for frame in ts.frames[1:n]:
         for dish in frame.dishes:
