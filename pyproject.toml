@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "PHASE"
-version = "0.1.1"
+version = "0.2.0"
 description = "A Python package for the image-based quantification of distinct lag phases during colony growth of carbon-starved E. coli."
 readme = "README.md"
 requires-python = ">=3.11"
