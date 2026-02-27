@@ -28,5 +28,6 @@ dist/
 Optuna Studies
 tuning.py
 watershed.py
+detect_timeseries_*.py
 data/Save/*
 
