@@ -23,10 +23,7 @@ dist/
 *.coverage
 .coverage
 .pytest_cache/
+temp_save
 
 # Other
-Optuna Studies
-tuning.py
-watershed.py
-data/Save/*
-
+detect_timeseries_*.py

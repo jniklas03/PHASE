@@ -26,6 +26,8 @@ def read_img(source):
         img = cv.imread(source)
     elif isinstance(source, np.ndarray):
         img = source
+    elif hasattr(source, "crop"):
+        img = source.crop
     else:
         raise TypeError("source must be a file path or a NumPy array")
     return img
@@ -53,7 +55,7 @@ def read_time(filename):
 
     match = re.match(r"(\d{2})\.(\d{2})\.(\d{4})-(\d{2})\.(\d{2})\.(\d{2})", name)
     if not match:
-        return None
+        raise ValueError(f"Could not extract timestamp from {filename}")
 
     day, month, year, hour, minute, second = map(int, match.groups())
     return datetime(year, month, day, hour, minute, second)
