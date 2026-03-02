@@ -9,4 +9,4 @@ if __name__ == "__main__":
     ts.preprocess_timeseries()
     ts.detect_timeseries()
     ts.plot_counts(DIR)
-    ts.export_images(DIR)
+    ts.export_images()
