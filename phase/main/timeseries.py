@@ -207,7 +207,8 @@ class Timeseries:
                     colony = Colony(
                         centroid=(int(blob.pt[0]), int(blob.pt[1])),
                         radius=int(blob.size / 2),
-                        growth_rate=0
+                        growth_rate=0,
+                        label=self.get_new_label()
                     )
                     dish.colonies.append(colony)
                 
