@@ -11,7 +11,7 @@ def test_loading():
 @pytest.mark.slow
 def test_populating(n=3):
     ts = Timeseries.from_directory("test", TIMELAPSE)
-    ts.populate_timeseries()
+    ts.generate_dishes_timeseries()
 
     # checking dishes/stencils init correctly
     stencils = ts.frames[0].dishes
@@ -37,7 +37,7 @@ def test_populating(n=3):
 @pytest.mark.slow
 def test_preprocessing(n=3):
     ts = Timeseries.from_directory("test", TIMELAPSE)
-    ts.populate_timeseries()
+    ts.generate_dishes_timeseries()
 
     # checks if preprocessing works correctly
     ts.preprocess_timeseries()
