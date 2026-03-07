@@ -6,4 +6,4 @@ DATA_DIR = THIS_DIR.parent / "data"
 TIMELAPSE = DATA_DIR / "Timelapse" / "T1"
 SYNTHETIC = DATA_DIR / "Syntetic"
 
-SAVE_PATH = THIS_DIR / "temp_save"
+SAVE_PATH = DATA_DIR / "Saved"
