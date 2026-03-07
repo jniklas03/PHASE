@@ -7,6 +7,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from scipy.optimize import linear_sum_assignment
+from scipy.signal import savgol_filter
 
 from .frame import Frame
 from .colony import Colony, CostFunction
@@ -53,7 +54,7 @@ class Timeseries:
     fg_masks: list[np.ndarray] | None = None
     bg_masks: list[np.ndarray] | None = None
     next_label: int = 0
-
+    
     @classmethod
     def from_directory(cls: type["Timeseries"], name:str, directory: str | Path):
         """
@@ -74,7 +75,7 @@ class Timeseries:
         timeseries.load_timeseries(directory)
         return timeseries
 
-    def load_timeseries(self, directory: str | Path):
+    def load_timeseries(self, directory: str | Path, populate_frames=True):
         """
         load all image files (.jpg, .jpeg, .png) from a directory into frames objects
 
@@ -102,7 +103,7 @@ class Timeseries:
 
                 self.frames.append(frame)
     
-    def populate_timeseries(self, use_stencil: bool = True):
+    def generate_dishes_timeseries(self, use_stencil: bool = True, del_image: bool = False):
         """
         populate dishes in each frame of the timeseries
 
@@ -121,12 +122,16 @@ class Timeseries:
             # use first frame as stencil for all frames
             stencils = self.frames[0].dishes
 
-            for frame in tqdm(self.frames, desc="Populating frames"):
+            for frame in tqdm(self.frames, desc="Generating dishes"):
                 frame.populate_frame_from_crop(stencils)
+                if del_image:
+                    frame.image = None
         else:
             # populate each frame independently
-            for frame in tqdm(self.frames, desc="Populating frames"):
+            for frame in tqdm(self.frames, desc="Generating dishes"):
                 frame.populate_frame()
+                if del_image:
+                    frame.image = None
     
     def make_masks(self, n=5):
         """
@@ -207,7 +212,7 @@ class Timeseries:
                     colony = Colony(
                         centroid=(int(blob.pt[0]), int(blob.pt[1])),
                         radius=int(blob.size / 2),
-                        growth_rate=0,
+                        expansion_rate=0,
                         label=self.get_new_label()
                     )
                     dish.colonies.append(colony)
@@ -219,7 +224,7 @@ class Timeseries:
             threshold = 0.9,
             verbosity = 0,
             cost_function: CostFunction = CostFunction.IOU_CIRCLE,
-            min_lost_radius = 2
+            min_lost_radius = 1
             ):
         # 1. init first frame colonies
         for dish in self.frames[0].dishes:
@@ -228,7 +233,7 @@ class Timeseries:
                 dish.colonies.append(Colony(
                     centroid=(int(blob.pt[0]), int(blob.pt[1])),
                     radius=float(blob.size / 2),
-                    growth_rate=0,
+                    expansion_rate=0,
                     label=self.get_new_label(), # getting unique label from timeseries
                     state="temp",
                     age=1
@@ -299,9 +304,9 @@ class Timeseries:
                 for prev_col, curr_blob in zip(matched_prev, matched_curr):
                     curr_radius = float(blob.size / 2)
 
-                    # growth_rate calculation
+                    # expansion_rate calculation
                     prev_col.kalman_update(curr_radius)
-                    growth_rate = prev_col.kf_radius - prev_col.radius
+                    expansion_rate = prev_col.kf_radius - prev_col.radius
 
                     curr_dish.colonies.append(Colony(
                         centroid=(int(curr_blob.pt[0]), int(curr_blob.pt[1])),
@@ -309,7 +314,7 @@ class Timeseries:
                         label=prev_col.label, # links labels
                         state="perm", # updates state to permanent
                         age=prev_col.age + 1, # increments age
-                        growth_rate=growth_rate,
+                        expansion_rate=expansion_rate,
                         P=prev_col.P,
                         Q=prev_col.Q,
                         R=prev_col.R,
@@ -328,7 +333,7 @@ class Timeseries:
                             label=col.label,
                             state="lost", # changes state to lost
                             age=prev_col.age, # keeps age static
-                            growth_rate=col.growth_rate,
+                            expansion_rate=col.expansion_rate,
                             P=col.P,
                             Q=col.Q,
                             R=col.R
@@ -346,8 +351,232 @@ class Timeseries:
                 curr_dish.count = len(curr_dish.colonies)
                 curr_dish.draw_tracked_colonies(verbosity=verbosity)
 
+    # def export_stats(self):
+    #     """
+    #     1. line plot radius vs time, with different colors for different dishes, and SD
+    #     2. expansion rate vs time
+    #     3. final radius boxplot
+    #     """
+    #     frame_stats = {frame.timestamp: {""} for frame in self.frames}
+    #     for frame in self.frames:
+    #         dish_stats = {dish.label: {"counts": [], "radius": [], "expansion_rate": []} for dish in frame.dishes}
 
-    def export_images(self, save_path: str = ""):
+    #     for frame in self.frames:
+    #         for dish in frame.dishes:
+    #             count = len(dish.colonies) if dish.colonies is not None else 0
+    #             dish_data[dish.label]["times"].append(frame.timestamp)
+    #             dish_data[dish.label]["counts"].append(count)
+
+    # def plot_growth_panels(self,
+    #                     save_path: str = "",
+    #                     file_name: str = "colony_growth_panels.png",
+    #                     smooth_window: int = 7,
+    #                     poly_order: int = 2):
+
+    #     assert self.frames, "Timeseries has no frames to plot."
+
+    #     save_path = Path(save_path)
+    #     (save_path / "plots").mkdir(parents=True, exist_ok=True)
+
+    #     frames = sorted(self.frames, key=lambda f: f.timestamp)
+    #     first_frame = frames[0]
+    #     n_dishes = len(first_frame.dishes)
+
+    #     cmap = cm.get_cmap("tab10", n_dishes)
+    #     colors = [cmap(i) for i in range(n_dishes)]
+
+    #     # Convert timestamps → hours since experiment start
+    #     t0 = frames[0].timestamp
+
+    #     dish_data = {
+    #         dish.label: {
+    #             "times": [],
+    #             "mean_radius": [],
+    #             "std_radius": [],
+    #             "smoothed_radius": [],
+    #             "dRdt": [],
+    #             "final_radii": []
+    #         }
+    #         for dish in first_frame.dishes
+    #     }
+
+    #     # --------------------------------
+    #     # Collect mean radius (perm only)
+    #     # --------------------------------
+    #     for frame in frames:
+
+    #         t_rel = (frame.timestamp - t0).total_seconds() / 3600.0
+
+    #         for dish in frame.dishes:
+
+    #             perm_colonies = [
+    #                 c for c in dish.colonies
+    #                 if dish.colonies and getattr(c, "state", None) == "perm"
+    #             ]
+
+    #             radii = [c.radius for c in perm_colonies]
+    #             label = dish.label
+
+    #             dish_data[label]["times"].append(t_rel)
+
+    #             if radii:
+    #                 dish_data[label]["mean_radius"].append(np.mean(radii))
+    #                 dish_data[label]["std_radius"].append(np.std(radii))
+    #             else:
+    #                 dish_data[label]["mean_radius"].append(np.nan)
+    #                 dish_data[label]["std_radius"].append(np.nan)
+
+    #     # --------------------------------
+    #     # Smooth + compute derivative
+    #     # --------------------------------
+    #     for label, data in dish_data.items():
+
+    #         times = np.array(data["times"], dtype=float)
+    #         mean_r = np.array(data["mean_radius"], dtype=float)
+
+    #         smoothed = np.full_like(mean_r, np.nan)
+    #         dRdt = np.full_like(mean_r, np.nan)
+
+    #         valid = ~np.isnan(mean_r)
+
+    #         if np.sum(valid) >= 5:
+
+    #             t_valid = times[valid]
+    #             r_valid = mean_r[valid]
+
+    #             # Ensure odd window size and not larger than data
+    #             window = min(smooth_window, len(r_valid))
+    #             if window % 2 == 0:
+    #                 window -= 1
+    #             if window < 3:
+    #                 window = 3
+
+    #             # Smooth radius
+    #             r_smooth = savgol_filter(r_valid,
+    #                                     window_length=window,
+    #                                     polyorder=min(poly_order, window - 1))
+
+    #             # Derivative of smoothed curve
+    #             dR = savgol_filter(r_valid,
+    #                             window_length=window,
+    #                             polyorder=min(poly_order, window - 1),
+    #                             deriv=1,
+    #                             delta=np.mean(np.diff(t_valid)))
+
+    #             smoothed[valid] = r_smooth
+    #             dRdt[valid] = dR
+
+    #         data["smoothed_radius"] = smoothed
+    #         data["dRdt"] = dRdt
+
+    #     # --------------------------------
+    #     # Find first time where ANY dish has perm data
+    #     # --------------------------------
+    #     first_valid_time = np.inf
+    #     for data in dish_data.values():
+    #         times = np.array(data["times"])
+    #         mean_r = np.array(data["mean_radius"])
+    #         valid = ~np.isnan(mean_r)
+    #         if np.any(valid):
+    #             first_valid_time = min(first_valid_time, times[valid][0])
+
+    #     # --------------------------------
+    #     # Final radii
+    #     # --------------------------------
+    #     final_frame = frames[-1]
+    #     for dish in final_frame.dishes:
+    #         perm_colonies = [
+    #             c for c in dish.colonies
+    #             if dish.colonies and getattr(c, "state", None) == "perm"
+    #         ]
+    #         dish_data[dish.label]["final_radii"] = [c.radius for c in perm_colonies]
+
+    #     # --------------------------------
+    #     # Create figure
+    #     # --------------------------------
+    #     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+    #     # ---------------- Panel A — Radius vs Time (scatter) ----------------
+    #     ax = axes[0]
+
+    #     for idx, (label, data) in enumerate(dish_data.items()):
+    #         times = np.array(data["times"])
+    #         mean_r = np.array(data["mean_radius"])
+    #         smoothed = np.array(data["smoothed_radius"])
+
+    #         valid = ~np.isnan(mean_r)
+
+    #         # Scatter actual datapoints
+    #         ax.scatter(times[valid],
+    #                 mean_r[valid],
+    #                 color=colors[idx],
+    #                 s=25,
+    #                 alpha=0.8,
+    #                 label=f"Dish {label+1}")
+
+    #         # Optional: faint smoothed curve behind points
+    #         ax.plot(times[valid],
+    #                 smoothed[valid],
+    #                 color=colors[idx],
+    #                 alpha=0.4,
+    #                 linewidth=1.5)
+
+    #     ax.set_xlim(left=first_valid_time)
+    #     ax.set_xlabel("Time (hours)")
+    #     ax.set_ylabel(r"$R(t)$")
+    #     ax.set_title("A) Radius vs Time")
+    #     ax.grid(True)
+
+    #     # Panel B — Smoothed Derivative
+    #     ax = axes[1]
+    #     for idx, (label, data) in enumerate(dish_data.items()):
+    #         ax.plot(data["times"],
+    #                 data["dRdt"],
+    #                 color=colors[idx],
+    #                 label=f"Dish {label+1}")
+
+    #     ax.set_xlim(left=first_valid_time)
+    #     ax.set_xlabel("Time (hours)")
+    #     ax.set_ylabel("dR/dt")
+    #     ax.set_title("B) Expansion Rate (smoothed)")
+    #     ax.grid(True)
+
+    #     # Panel C — Final distribution
+    #     ax = axes[2]
+
+    #     final_data = []
+    #     labels = []
+
+    #     for idx, (label, data) in enumerate(dish_data.items()):
+    #         final_data.append(data["final_radii"])
+    #         labels.append(f"D{label+1}")
+
+    #     box = ax.boxplot(final_data, patch_artist=True)
+
+    #     for patch, color in zip(box["boxes"], colors):
+    #         patch.set_facecolor(color)
+    #         patch.set_alpha(0.6)
+
+    #     ax.set_xticklabels(labels)
+    #     ax.set_ylabel("Final Radius (perm)")
+    #     ax.set_title("C) Final Radius Distribution")
+    #     ax.grid(True)
+
+    #     # Legend
+    #     handles = [
+    #         plt.Line2D([0], [0], color=colors[i], lw=2)
+    #         for i in range(n_dishes)
+    #     ]
+    #     fig.legend(handles,
+    #             [f"Dish {i+1}" for i in range(n_dishes)],
+    #             loc="upper center",
+    #             ncol=n_dishes)
+
+    #     plt.tight_layout(rect=[0, 0, 1, 0.92])
+    #     plt.savefig(save_path / "plots" / file_name, dpi=300)
+    #     plt.close()
+
+    def export_images(self, save_path: str | Path = ""):
         """
         export all images contained in a timeseries
 
