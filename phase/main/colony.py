@@ -11,7 +11,7 @@ class Colony:
     label: int
     state: str = "temp"
     age: int = 1
-    growth_rate: float = 0.0
+    expansion_rate: float = 0.0
 
     # Kalman filter fields
     kf_radius: float = field(init=False)
@@ -26,7 +26,7 @@ class Colony:
 
     def kalman_predict(self):
         # predicts change in radius
-        self.kf_radius += self.growth_rate
+        self.kf_radius += self.expansion_rate
         # uncertainty grows by process noise before seeing the measurment
         self.P += self.Q 
 
