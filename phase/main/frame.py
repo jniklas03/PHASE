@@ -7,7 +7,7 @@ import numpy as np
 import os
 import warnings
 
-from ..helpers.inputs import read_img
+from ..helpers.inputs import read_img, Image
 
 from .dish import Dish
 
@@ -15,23 +15,18 @@ from .dish import Dish
 class Frame:
     name: str
     timestamp: datetime
-    image_path: Path | str
-    image: np.ndarray | None = None
+    image: Image | None = None
     dishes: list[Dish] = field(default_factory=list)
 
-    def load_image(self): # lazy loading
-        if self.image is None:
-            self.image = read_img(self.image_path)
-    
     def populate_frame(self):
-        self.load_image()
+        self.image.load()
 
-        self.dishes = dish_pipeline(source=self.image)
-    
+        self.dishes = dish_pipeline(source=self.image.load())
+
     def populate_frame_from_crop(self, stencils):
-        self.load_image()
+        self.image.load()
 
-        self.dishes = crop_dishes(self.image, stencils)
+        self.dishes = crop_dishes(self.image.load(), stencils)
 
 def detect_dishes(img: np.ndarray) -> list[Dish]:
     """
@@ -149,7 +144,7 @@ def crop_dishes(source: np.ndarray, stencils: list[Dish]) -> list[Dish]:
             label=idx,
             centroid=(x,y),
             radius=r,
-            crop=crop)
+            crop=Image(crop))
             )
         
     return dishes

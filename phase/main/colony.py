@@ -16,8 +16,8 @@ class Colony:
     # Kalman filter fields
     kf_radius: float = field(init=False)
     P: float = 1.0      # uncertainty in prediction
-    Q: float = 0.05      # process noise
-    R: float = 0.6      # measurment noise
+    Q: float = 0.1      # process noise
+    R: float = 0.5      # measurment noise
 
     def __post_init__(self):
         # after detection sets predicted radius = detected radius

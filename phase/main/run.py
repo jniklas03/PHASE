@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
+
 
 from .timeseries import Timeseries
 from .colony import CostFunction
@@ -42,9 +44,13 @@ class Run:
 
                 self.timeseries_list.append(timeseries)
 
-    def populate_run(self, use_stencil=True, del_image: bool = True):
-        for ts in tqdm(self.timeseries_list, desc="Populating run"):
-            ts.generate_dishes_timeseries(use_stencil, del_image=del_image)
+    def populate_run(self, use_stencil=True):
+        with ThreadPoolExecutor() as ex:
+            list(tqdm(
+                ex.map(lambda ts: ts.generate_dishes_timeseries(use_stencil), self.timeseries_list),
+                total=len(self.timeseries_list),
+                desc="Populating run"
+            ))
 
     def preprocess_run(
             self,

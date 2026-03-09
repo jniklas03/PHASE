@@ -3,8 +3,9 @@ from dataclasses import dataclass, field
 import cv2 as cv
 import numpy as np
 import warnings
+from pathlib import Path
 
-from ..helpers.inputs import read_img
+from ..helpers.inputs import read_img, Image
 from .colony import Colony
 
 @dataclass
@@ -14,11 +15,12 @@ class Dish:
     label: int | None = None
     count: int | None = None
     colonies: list[Colony] = field(default_factory=list)
-    crop: np.ndarray | None = None
-    preprocessed: np.ndarray | None = None
-    preprocessed_masked: np.ndarray | None = None
-    initial_detection: np.ndarray | None = None
-    tracked_detection: np.ndarray | None = None
+    crop: Image | None = None
+    preprocessed: Image | None = None
+    preprocessed_masked: Image | None = None
+    initial_detection: Image | None = None
+    tracked_detection: Image | None = None
+
 
     def _mask_from_crop(self) -> np.ndarray:
         h, w = self.crop.shape[:2]
@@ -32,7 +34,7 @@ class Dish:
     def isolate_fg(self):
         mask = self._mask_from_crop()
 
-        preprocessed = Dish.fg_isolation(self.crop)
+        preprocessed = Dish.fg_isolation(self.crop.load())
 
         cropped = cv.bitwise_and(preprocessed, preprocessed, mask=mask)
 
@@ -41,7 +43,7 @@ class Dish:
     def isolate_bg(self):
         mask = self._mask_from_crop()
 
-        preprocessed = Dish.bg_isolation(self.crop)
+        preprocessed = Dish.bg_isolation(self.crop.load())
 
         cropped = cv.bitwise_and(preprocessed, preprocessed, mask=mask)
 
@@ -51,7 +53,7 @@ class Dish:
         # flipping the outside of the dish
         mask = self._mask_from_crop()
 
-        preprocessed = Dish.preprocessing(self.crop, use_area_filter=use_area_filter)
+        preprocessed = Dish.preprocessing(self.crop.load(), use_area_filter=use_area_filter)
 
         cropped = cv.bitwise_and(preprocessed, preprocessed, mask=mask)
 
@@ -76,11 +78,11 @@ class Dish:
         
         if self.crop is None:
             warnings.warn("Crop not found. Using preprocessed image for visualisation.")
-            blobs, output = Dish.colony_detection(self.preprocessed)
+            blobs, output = Dish.colony_detection(self.preprocessed.load())
         else:
-            blobs, output = Dish.colony_detection(self.preprocessed, raw_img=self.crop)
-        
-        self.initial_detection = output
+            blobs, output = Dish.colony_detection(self.preprocessed.load(), raw_img=self.crop.load())
+            
+        self.initial_detection = Image(output)
 
         return blobs
     
@@ -119,7 +121,7 @@ class Dish:
                 cv.putText(output, text, (cx + int(col.radius) + 2, cy),
                         cv.FONT_HERSHEY_SIMPLEX, 0.2, (0, 0, 0), 1, cv.LINE_AA)
 
-        self.tracked_detection = output
+        self.tracked_detection = Image(output)
 
     @staticmethod
     def preprocessing(
