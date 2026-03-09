@@ -345,7 +345,7 @@ class Timeseries:
                     ))
         
         # 6. newly lost colony handling
-                for i, col in enumerate(unmatched_prev):
+                for col in unmatched_prev:
                     # area filtering to prevent noise from persisting
                     if col.radius >= min_lost_radius:
                         col.kalman_predict()
@@ -356,7 +356,7 @@ class Timeseries:
                             radius=predicted_radius,
                             label=col.label,
                             state="lost", # changes state to lost
-                            age=prev_col.age, # keeps age static
+                            age=col.age, # keeps age static
                             expansion_rate=col.expansion_rate,
                             P=col.P,
                             Q=col.Q,
@@ -622,7 +622,7 @@ class Timeseries:
 
         # debug overlay for first frame
         first_frame = self.frames[0]
-        overlay = first_frame.image.copy()
+        overlay = first_frame.image.load().copy()
 
         for dish in first_frame.dishes:
             x, y = dish.centroid

@@ -23,7 +23,7 @@ class Dish:
 
 
     def _mask_from_crop(self) -> np.ndarray:
-        h, w = self.crop.shape[:2]
+        h, w = self.crop.load().shape[:2]
         cx, cy = w // 2, h // 2
 
         mask = np.zeros((h, w), dtype=np.uint8)
@@ -90,7 +90,7 @@ class Dish:
         if self.crop is None:
             return
 
-        output = self.crop.copy()
+        output = self.crop.load().copy()
 
         for col in self.colonies:
             kp = cv.KeyPoint(
