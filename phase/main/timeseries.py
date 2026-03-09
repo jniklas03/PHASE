@@ -7,14 +7,15 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from scipy.optimize import linear_sum_assignment
+from concurrent.futures import ThreadPoolExecutor
+
 from scipy.signal import savgol_filter
 
 from .frame import Frame
 from .colony import Colony, CostFunction
 from .dish import Dish
 
-from ..helpers.inputs import read_time
-
+from ..helpers.inputs import read_time, Image
 
 @dataclass
 class Timeseries:
@@ -54,7 +55,7 @@ class Timeseries:
     fg_masks: list[np.ndarray] | None = None
     bg_masks: list[np.ndarray] | None = None
     next_label: int = 0
-    
+
     @classmethod
     def from_directory(cls: type["Timeseries"], name:str, directory: str | Path):
         """
@@ -75,7 +76,7 @@ class Timeseries:
         timeseries.load_timeseries(directory)
         return timeseries
 
-    def load_timeseries(self, directory: str | Path, populate_frames=True):
+    def load_timeseries(self, directory: str | Path):
         """
         load all image files (.jpg, .jpeg, .png) from a directory into frames objects
 
@@ -98,12 +99,12 @@ class Timeseries:
                 frame = Frame(
                     name=item.stem,
                     timestamp=timestamp,
-                    image_path=Path(item)
+                    image=Image(item)
                 )
 
                 self.frames.append(frame)
     
-    def generate_dishes_timeseries(self, use_stencil: bool = True, del_image: bool = False):
+    def generate_dishes_timeseries(self, use_stencil: bool = True):
         """
         populate dishes in each frame of the timeseries
 
@@ -115,6 +116,14 @@ class Timeseries:
         if not self.frames:
             raise ValueError("Timeseries has no frames to populate.")
 
+        def _populate_frame(frame, stencils):
+            frame.populate_frame_from_crop(stencils)
+            return frame
+
+        def _populate_frame_no_crop(frame):
+            frame.populate_frame()
+            return _populate_frame
+
         if use_stencil:
             # populate first frame
             self.frames[0].populate_frame()
@@ -122,16 +131,21 @@ class Timeseries:
             # use first frame as stencil for all frames
             stencils = self.frames[0].dishes
 
-            for frame in tqdm(self.frames, desc="Generating dishes"):
-                frame.populate_frame_from_crop(stencils)
-                if del_image:
-                    frame.image = None
+            with ThreadPoolExecutor() as ex:
+                self.frames = list(tqdm(
+                    ex.map(lambda f: _populate_frame(f, stencils), self.frames[1:]),
+                    total=len(self.frames[1:]),
+                    desc="Generating dishes"
+                ))
+
         else:
             # populate each frame independently
-            for frame in tqdm(self.frames, desc="Generating dishes"):
-                frame.populate_frame()
-                if del_image:
-                    frame.image = None
+            with ThreadPoolExecutor() as ex:
+                self.frames = list(tqdm(
+                    ex.map(lambda f: _populate_frame_no_crop(), self.frames),
+                    total=len(self.frames),
+                    desc="Generating dishes"
+                ))
     
     def make_masks(self, n=5):
         """
@@ -193,15 +207,24 @@ class Timeseries:
         if use_bg_mask or use_fg_mask:
             self.make_masks(n=n)
 
-        for frame in tqdm(self.frames, desc="Preprocessing frames"):
+        def _preprocess_frame(frame):
             for dish in frame.dishes:
-                dish.preprocessed = dish.preprocess_dish(
+                dish.preprocessed = Image(dish.preprocess_dish(
                     fg_mask=self.fg_masks[dish.label] if use_fg_mask else None,
                     bg_mask=self.bg_masks[dish.label] if use_bg_mask else None,
                     use_bg_mask=use_bg_mask,
                     use_fg_mask=use_fg_mask,
                     use_area_filter=use_area_filter
-                )
+                ))
+            return frame
+        
+        with ThreadPoolExecutor() as ex:
+            self.frames = list(tqdm(
+                ex.map(_preprocess_frame, self.frames),
+                total=len(self.frames),
+                desc="Preprocessing frames"
+            ))
+
 
     def detect_timeseries_old(self):
         for frame in tqdm(self.frames, desc="Detecting colonies"):
@@ -221,10 +244,10 @@ class Timeseries:
 
     def detect_timeseries(
             self,
-            threshold = 0.9,
+            threshold = 0.95,
             verbosity = 0,
             cost_function: CostFunction = CostFunction.IOU_CIRCLE,
-            min_lost_radius = 1
+            min_lost_radius = 2
             ):
         # 1. init first frame colonies
         for dish in self.frames[0].dishes:
@@ -252,7 +275,7 @@ class Timeseries:
                 curr_dish.colonies = []
 
         # 3. apply growth extrapolation to previously lost colonies, mask them, and detect colonies for current dish
-                lost_mask = np.zeros_like(prev_dish.preprocessed)
+                lost_mask = np.zeros_like(prev_dish.preprocessed.load())
 
                 for col in prev_cols:
                     if col.state == "lost":
@@ -263,16 +286,17 @@ class Timeseries:
                         cv.circle(lost_mask, (x, y), r, 255, -1)
             
                 preprocessed_masked = cv.bitwise_and(
-                    curr_dish.preprocessed,
+                    curr_dish.preprocessed.load(),
                     cv.bitwise_not(lost_mask)
                 )
 
                 curr_blobs, _ = Dish.colony_detection(
                     preprocessed_masked,
-                    curr_dish.crop
+                    curr_dish.crop.load()
                 )
 
-                curr_dish.preprocessed_masked = preprocessed_masked
+                curr_dish.preprocessed_masked = Image(preprocessed_masked)
+
 
         # 4. make cost matrix (prev_blobs x curr_blobs) / run hungarian algorithm
                 n, m = len(prev_cols), len(curr_blobs)
@@ -302,7 +326,7 @@ class Timeseries:
 
         # 5. link matched colonies
                 for prev_col, curr_blob in zip(matched_prev, matched_curr):
-                    curr_radius = float(blob.size / 2)
+                    curr_radius = float(curr_blob.size / 2)
 
                     # expansion_rate calculation
                     prev_col.kalman_update(curr_radius)
@@ -615,15 +639,20 @@ class Timeseries:
         for frame in tqdm(self.frames, desc="Saving images"):
             for dish in frame.dishes:
                 if dish.crop is not None:
-                    cv.imwrite(str(save_path / "dish_detection" / f"{frame.name}_dish{dish.label}.png"), dish.crop)
+                    cv.imwrite(str(save_path / "dish_detection" / f"{frame.name}_dish{dish.label}.png"), dish.crop.load())
+
                 if dish.preprocessed is not None:
-                    cv.imwrite(str(save_path / "preprocessed" / f"{frame.name}_dish{dish.label}.png"), dish.preprocessed)
+                    cv.imwrite(str(save_path / "preprocessed" / f"{frame.name}_dish{dish.label}.png"), dish.preprocessed.load())
+
                 if dish.preprocessed_masked is not None:
-                    cv.imwrite(str(save_path / "preprocessed_masked" / f"{frame.name}_dish{dish.label}.png"), dish.preprocessed_masked)
+                    cv.imwrite(str(save_path / "preprocessed_masked" / f"{frame.name}_dish{dish.label}.png"), dish.preprocessed_masked.load())
+
                 if dish.initial_detection is not None:
-                    cv.imwrite(str(save_path / "initial_detection" / f"{frame.name}_dish{dish.label}.png"), dish.initial_detection)
+                    cv.imwrite(str(save_path / "initial_detection" / f"{frame.name}_dish{dish.label}.png"), dish.initial_detection.load())
+
+
                 if dish.tracked_detection is not None:
-                    cv.imwrite(str(save_path / "tracked_detection" / f"{frame.name}_dish{dish.label}.png"), dish.tracked_detection)
+                    cv.imwrite(str(save_path / "tracked_detection" / f"{frame.name}_dish{dish.label}.png"), dish.tracked_detection.load())
 
         # fg/bg masks
         if self.fg_masks is not None:
