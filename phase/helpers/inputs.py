@@ -4,6 +4,9 @@ from pypdf import PdfReader
 from datetime import datetime
 import sys
 from pathlib import Path
+from dataclasses import dataclass
+import tempfile
+import uuid
 
 def read_img(source):
     """
@@ -169,3 +172,47 @@ def show_image(
         sys.exit("Exiting")
     elif key == ord("s"):
         cv.imwrite(f"{name}.png", source)
+
+@dataclass
+class Image:
+    path: Path
+
+    def __init__(self, source: np.ndarray | str | Path):
+        tmp_dir = Path(tempfile.gettempdir()) / "phase_temp"
+        tmp_dir.mkdir(exist_ok=True)
+
+        if isinstance(source, (str, Path)):
+            source = Path(source)
+
+            if source.suffix.lower() in [".png", ".jpg", ".jpeg"]:
+                img = cv.imread(str(source), cv.IMREAD_UNCHANGED)
+
+                self.path = tmp_dir / f"{uuid.uuid4().hex}.npy"
+                np.save(self.path, img)
+            else:
+                raise TypeError("Image type unknown. Expects '.png', '.jpg', '.jpeg'")
+        elif isinstance(source, np.ndarray):
+            self.path = tmp_dir / f"{uuid.uuid4().hex}.npy"
+            np.save(self.path, source)
+
+        else:
+            raise TypeError("Image expects path or numpy array")
+
+    def __array__(self, dtype=None):
+        arr = self.load()
+        if dtype:
+            arr = arr.astype(dtype)
+        return arr
+
+    def load(self) -> np.ndarray:
+        return np.load(self.path, allow_pickle=False, mmap_mode="r")
+
+    def export(self, path: Path):
+        cv.imwrite(str(path), self.load())
+
+    def __del__(self):
+        if self.path and self.path.exists():
+            try:
+                self.path.unlink()
+            except Exception:
+                pass
