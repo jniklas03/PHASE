@@ -156,19 +156,40 @@ class Timeseries:
         n : int, optional
             number of initial frames used to compute background masks (default 5).
         """
+
         # foreground mask from last frame
-        fg_masks = []
-        for dish in tqdm(self.frames[-1].dishes, desc="Making foreground masks"):
-            fg_mask = dish.isolate_fg()
-            fg_masks.append(fg_mask)
+        def _make_fg_mask(dish):
+            return dish.label, dish.isolate_fg()
+
+        with ThreadPoolExecutor() as ex:
+            results = list(tqdm(
+                ex.map(_make_fg_mask, self.frames[-1].dishes),
+                total=len(self.frames[-1].dishes),
+                desc="Making foreground masks"
+            ))
+
+        fg_masks = [None] * len(results)
+        for label, mask in results:
+            fg_masks[label] = mask
+
 
         # bg mask from first n frames
+        def _make_bg_mask(dish):
+            return dish.label, dish.isolate_bg()
+
         frame_groups: dict[int, list[np.ndarray]] = defaultdict(list)
 
-        for frame in tqdm(self.frames[:n], desc="Making background masks"):
-            for dish in frame.dishes:
-                preprocessed = dish.isolate_bg()
-                frame_groups[dish.label].append(preprocessed)
+        dishes = [dish for frame in self.frames[:n] for dish in frame.dishes]
+
+        with ThreadPoolExecutor() as ex:
+            results = list(tqdm(
+                ex.map(_make_bg_mask, dishes),
+                total=len(dishes),
+                desc="Making background masks"
+            ))
+
+        for label, mask in results:
+            frame_groups[label].append(mask)
 
         bg_masks = []
 
@@ -219,7 +240,7 @@ class Timeseries:
             return frame
         
         with ThreadPoolExecutor() as ex:
-            self.frames = list(tqdm(
+            list(tqdm(
                 ex.map(_preprocess_frame, self.frames),
                 total=len(self.frames),
                 desc="Preprocessing frames"
@@ -635,8 +656,8 @@ class Timeseries:
 
         cv.imwrite(str(save_path / "dish_detection" / f"{first_frame.name}_debug.png"), overlay)
 
+        def _save_images(frame):
         # crops, preprocessed, detections
-        for frame in tqdm(self.frames, desc="Saving images"):
             for dish in frame.dishes:
                 if dish.crop is not None:
                     cv.imwrite(str(save_path / "dish_detection" / f"{frame.name}_dish{dish.label}.png"), dish.crop.load())
@@ -653,6 +674,14 @@ class Timeseries:
 
                 if dish.tracked_detection is not None:
                     cv.imwrite(str(save_path / "tracked_detection" / f"{frame.name}_dish{dish.label}.png"), dish.tracked_detection.load())
+
+        
+        with ThreadPoolExecutor() as ex:
+            list(tqdm(
+                ex.map(_save_images, self.frames),
+                total=len(self.frames),
+                desc="Saving images"
+            ))
 
         # fg/bg masks
         if self.fg_masks is not None:
