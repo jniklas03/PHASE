@@ -7,6 +7,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from scipy.optimize import linear_sum_assignment
+from scipy.spatial import KDTree
 from concurrent.futures import ThreadPoolExecutor
 
 from scipy.signal import savgol_filter
@@ -246,7 +247,6 @@ class Timeseries:
                 desc="Preprocessing frames"
             ))
 
-
     def detect_timeseries_old(self):
         for frame in tqdm(self.frames, desc="Detecting colonies"):
             for dish in frame.dishes:
@@ -265,14 +265,17 @@ class Timeseries:
 
     def detect_timeseries(
             self,
-            threshold = 0.95,
+            detection_threshold = 0.99,
+            distance_threshold = 5,
             verbosity = 0,
             cost_function: CostFunction = CostFunction.IOU_CIRCLE,
             min_lost_radius = 2
             ):
+
         # 1. init first frame colonies
         for dish in self.frames[0].dishes:
             blobs = dish.detect_colonies()
+
             for blob in blobs:
                 dish.colonies.append(Colony(
                     centroid=(int(blob.pt[0]), int(blob.pt[1])),
@@ -283,118 +286,162 @@ class Timeseries:
                     age=1
                 ))
 
-        # 2. iterate over subsequent frames
+        # worker function for parallelisation
+        def _track_dish(prev_dish, curr_dish, detection_threshold, distance_threshold, cost_function, min_lost_radius, verbosity):
+
+            # previous colonies get loaded in
+            prev_cols = prev_dish.colonies
+
+            # current colonies get initialised / cleared
+            curr_dish.colonies = []
+
+            # 2. apply growth extrapolation to previously lost colonies, mask them, and detect colonies for current dish
+            lost_mask = np.zeros_like(prev_dish.preprocessed.load())
+
+            for col in prev_cols:
+                if col.state == "lost":
+
+                    col.kalman_predict()
+
+                    r = max(int(col.kf_radius), 1) # failsafe: minimum radius of 1
+                    x, y = int(col.centroid[0]), int(col.centroid[1])
+
+                    cv.circle(lost_mask, (x, y), r, 255, -1)
+
+            preprocessed_masked = cv.bitwise_and(
+                curr_dish.preprocessed.load(),
+                cv.bitwise_not(lost_mask)
+            )
+
+            curr_blobs, _ = Dish.colony_detection(
+                preprocessed_masked,
+                curr_dish.crop.load()
+            )
+
+            curr_dish.preprocessed_masked = Image(preprocessed_masked)
+
+            # 3. make candidate pairs using KDTree (prev_blobs x curr_blobs) (replacement of hungarian)
+            n, m = len(prev_cols), len(curr_blobs)
+            matches = []
+
+            if n > 0 and m > 0:
+
+                curr_centroids = np.array([b.pt for b in curr_blobs])
+
+                tree = KDTree(curr_centroids)
+
+                candidate_pairs = []
+
+                # distance gating
+                for i, prev_col in enumerate(prev_cols):
+
+                    neighbors = tree.query_ball_point(prev_col.centroid, distance_threshold)
+
+                    for j in neighbors:
+
+                        cost = cost_function(prev_col, curr_blobs[j])
+
+                        if cost < detection_threshold:
+                            candidate_pairs.append((cost, i, j))
+
+                # sorting (lowest cost first)
+                candidate_pairs.sort()
+
+                used_prev = set()
+                used_curr = set()
+
+                for cost, i, j in candidate_pairs:
+
+                    if i not in used_prev and j not in used_curr:
+                        matches.append((i, j))
+                        used_prev.add(i)
+                        used_curr.add(j)
+
+            # 4. assignment
+            matched_prev = [prev_cols[r] for r, _ in matches]
+            matched_curr = [curr_blobs[c] for _, c in matches]
+
+            matched_prev_idx = {r for r, _ in matches}
+            matched_curr_idx = {c for _, c in matches}
+
+            unmatched_prev = [prev_cols[i] for i in range(n) if i not in matched_prev_idx] # colonies that disappeared
+            unmatched_curr = [curr_blobs[j] for j in range(m) if j not in matched_curr_idx] # colonies that newly appeared
+
+            # 5. link matched colonies
+            for prev_col, curr_blob in zip(matched_prev, matched_curr):
+
+                curr_radius = float(curr_blob.size / 2)
+
+                # expansion_rate calculation
+                prev_col.kalman_update(curr_radius)
+                expansion_rate = prev_col.kf_radius - prev_col.radius
+
+                curr_dish.colonies.append(Colony(
+                    centroid=(int(curr_blob.pt[0]), int(curr_blob.pt[1])),
+                    radius=curr_radius,
+                    label=prev_col.label, # links labels
+                    state="perm", # updates state to permanent
+                    age=prev_col.age + 1, # increments age
+                    expansion_rate=expansion_rate,
+                    P=prev_col.P,
+                    Q=prev_col.Q,
+                    R=prev_col.R,
+                ))
+
+            # 6. newly lost colony handling
+            for col in unmatched_prev:
+
+                # area filtering to prevent noise from persisting
+                if col.radius >= min_lost_radius:
+
+                    col.kalman_predict()
+
+                    curr_dish.colonies.append(Colony(
+                        centroid=col.centroid,
+                        radius=col.kf_radius,
+                        label=col.label,
+                        state="lost", # changes state to lost
+                        age=col.age, # keeps age static
+                        expansion_rate=col.expansion_rate,
+                        P=col.P,
+                        Q=col.Q,
+                        R=col.R
+                    ))
+
+            # 7. add new colonies
+            for blob in unmatched_curr:
+
+                curr_dish.colonies.append(Colony(
+                    centroid=(int(blob.pt[0]), int(blob.pt[1])),
+                    radius=float(blob.size / 2),
+                    label=self.get_new_label(),
+                    state="temp",
+                    age=1
+                ))
+
+
+            # 8. update dish count and draw tracked colonies
+            curr_dish.count = len(curr_dish.colonies)
+
+            curr_dish.draw_tracked_colonies(verbosity=verbosity)
+
+            return curr_dish
+
+        # iteratation over [1:] frames with worker
         for n in tqdm(range(1, len(self.frames)), desc="Tracking colonies"):
+
             prev_frame = self.frames[n - 1]
             curr_frame = self.frames[n]
 
-            for prev_dish, curr_dish in zip(prev_frame.dishes, curr_frame.dishes):
+            with ThreadPoolExecutor() as ex:
 
-                # previous colonies get loaded in
-                prev_cols = prev_dish.colonies
-                # current colonies get initialised / cleared
-                curr_dish.colonies = []
-
-        # 3. apply growth extrapolation to previously lost colonies, mask them, and detect colonies for current dish
-                lost_mask = np.zeros_like(prev_dish.preprocessed.load())
-
-                for col in prev_cols:
-                    if col.state == "lost":
-                        col.kalman_predict()
-                        r = max(int(col.kf_radius), 1) # failsafe: minimium radius of 1
-                        x, y = int(col.centroid[0]), int(col.centroid[1])
-
-                        cv.circle(lost_mask, (x, y), r, 255, -1)
-            
-                preprocessed_masked = cv.bitwise_and(
-                    curr_dish.preprocessed.load(),
-                    cv.bitwise_not(lost_mask)
-                )
-
-                curr_blobs, _ = Dish.colony_detection(
-                    preprocessed_masked,
-                    curr_dish.crop.load()
-                )
-
-                curr_dish.preprocessed_masked = Image(preprocessed_masked)
-
-
-        # 4. make cost matrix (prev_blobs x curr_blobs) / run hungarian algorithm
-                n, m = len(prev_cols), len(curr_blobs)
-                matches = [] # clear matches for each dish
-
-                if n > 0 and m > 0:
-                    cost_matrix = np.zeros((n,m))
-
-                    # calculating cost between each blob
-                    for i, prev_colony in enumerate(prev_cols):
-                        for j, curr_blob in enumerate(curr_blobs):
-                            cost_matrix[i, j] = cost_function(prev_colony, curr_blob)
-
-                    row_idx, col_idx = linear_sum_assignment(cost_matrix)
-
-                    # thresholding
-                    for row, col in zip(row_idx, col_idx):
-                        if cost_matrix[row, col] < threshold:
-                            matches.append((row, col))
-
-                # assignment
-                matched_prev = [prev_cols[r] for r, _ in matches]
-                matched_curr = [curr_blobs[c] for _, c in matches]
-
-                unmatched_prev = [prev_cols[i] for i in range(n) if i not in {r for r, _ in matches}] # colonies that disappeared
-                unmatched_curr = [curr_blobs[j] for j in range(m) if j not in {c for _, c in matches}] # colonies that newly appeared
-
-        # 5. link matched colonies
-                for prev_col, curr_blob in zip(matched_prev, matched_curr):
-                    curr_radius = float(curr_blob.size / 2)
-
-                    # expansion_rate calculation
-                    prev_col.kalman_update(curr_radius)
-                    expansion_rate = prev_col.kf_radius - prev_col.radius
-
-                    curr_dish.colonies.append(Colony(
-                        centroid=(int(curr_blob.pt[0]), int(curr_blob.pt[1])),
-                        radius=float(curr_blob.size / 2),
-                        label=prev_col.label, # links labels
-                        state="perm", # updates state to permanent
-                        age=prev_col.age + 1, # increments age
-                        expansion_rate=expansion_rate,
-                        P=prev_col.P,
-                        Q=prev_col.Q,
-                        R=prev_col.R,
-                    ))
-        
-        # 6. newly lost colony handling
-                for col in unmatched_prev:
-                    # area filtering to prevent noise from persisting
-                    if col.radius >= min_lost_radius:
-                        col.kalman_predict()
-                        predicted_radius = col.kf_radius
-
-                        curr_dish.colonies.append(Colony(
-                            centroid=col.centroid,
-                            radius=predicted_radius,
-                            label=col.label,
-                            state="lost", # changes state to lost
-                            age=col.age, # keeps age static
-                            expansion_rate=col.expansion_rate,
-                            P=col.P,
-                            Q=col.Q,
-                            R=col.R
-                        ))
-        # 7. add new colonies
-                for i, blob in enumerate(unmatched_curr):
-                    curr_dish.colonies.append(Colony(
-                        centroid=(int(blob.pt[0]), int(blob.pt[1])),
-                        radius=float(blob.size / 2),
-                        label=self.get_new_label(),
-                        state="temp",
-                        age=1
-                    ))
-        # 8. update dish count and draw tracked colonies
-                curr_dish.count = len(curr_dish.colonies)
-                curr_dish.draw_tracked_colonies(verbosity=verbosity)
+                list(ex.map(
+                    lambda args: _track_dish(*args),
+                    [
+                        (prev_dish, curr_dish, detection_threshold, distance_threshold, cost_function, min_lost_radius, verbosity)
+                        for prev_dish, curr_dish in zip(prev_frame.dishes, curr_frame.dishes)
+                    ]
+                ))
 
     def export_images(self, save_path: str | Path = ""):
         """
