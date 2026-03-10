@@ -266,7 +266,7 @@ class Timeseries:
     def detect_timeseries(
             self,
             detection_threshold = 0.99,
-            distance_threshold = 5,
+            distance_threshold = 10,
             verbosity = 0,
             cost_function: CostFunction = CostFunction.IOU_CIRCLE,
             min_lost_radius = 2
@@ -304,8 +304,8 @@ class Timeseries:
                     col.kalman_predict()
 
                     r = max(int(col.kf_radius), 1) # failsafe: minimum radius of 1
-                    x, y = int(col.centroid[0]), int(col.centroid[1])
-
+                    x, y = int(col.kf_centroid[0]), int(col.kf_centroid[1])
+                    
                     cv.circle(lost_mask, (x, y), r, 255, -1)
 
             preprocessed_masked = cv.bitwise_and(
@@ -369,40 +369,39 @@ class Timeseries:
 
             # 5. link matched colonies
             for prev_col, curr_blob in zip(matched_prev, matched_curr):
+                measured_radius = float(curr_blob.size / 2)
+                measured_centroid = curr_blob.pt
 
-                curr_radius = float(curr_blob.size / 2)
-
-                # expansion_rate calculation
-                prev_col.kalman_update(curr_radius)
-                expansion_rate = prev_col.kf_radius - prev_col.radius
+                # update Kalman filter with new measurement
+                prev_col.kalman_update(measured_radius, measured_centroid)
 
                 curr_dish.colonies.append(Colony(
-                    centroid=(int(curr_blob.pt[0]), int(curr_blob.pt[1])),
-                    radius=curr_radius,
-                    label=prev_col.label, # links labels
-                    state="perm", # updates state to permanent
-                    age=prev_col.age + 1, # increments age
-                    expansion_rate=expansion_rate,
+                    centroid=(int(prev_col.kf_centroid[0]), int(prev_col.kf_centroid[1])),
+                    radius=prev_col.kf_radius,
+                    label=prev_col.label,
+                    state="perm",
+                    age=prev_col.age + 1,
+                    expansion_rate=prev_col.kf_expansion_rate,
                     P=prev_col.P,
                     Q=prev_col.Q,
-                    R=prev_col.R,
+                    R=prev_col.R
                 ))
 
             # 6. newly lost colony handling
             for col in unmatched_prev:
-
-                # area filtering to prevent noise from persisting
                 if col.radius >= min_lost_radius:
+                    max_growth_per_frame = 1.5
+                    col.kf_radius += min(col.kf_expansion_rate, max_growth_per_frame)
 
-                    col.kalman_predict()
+                    col.kf_expansion_rate *= 0.65
 
                     curr_dish.colonies.append(Colony(
-                        centroid=col.centroid,
+                        centroid=(int(col.kf_centroid[0]), int(col.kf_centroid[1])),
                         radius=col.kf_radius,
                         label=col.label,
-                        state="lost", # changes state to lost
-                        age=col.age, # keeps age static
-                        expansion_rate=col.expansion_rate,
+                        state="lost",
+                        age=col.age,
+                        expansion_rate=col.kf_expansion_rate,
                         P=col.P,
                         Q=col.Q,
                         R=col.R
@@ -410,14 +409,23 @@ class Timeseries:
 
             # 7. add new colonies
             for blob in unmatched_curr:
+                new_radius = float(blob.size / 2)
+                new_centroid = blob.pt
 
-                curr_dish.colonies.append(Colony(
-                    centroid=(int(blob.pt[0]), int(blob.pt[1])),
-                    radius=float(blob.size / 2),
+                colony = Colony(
+                    centroid=(int(new_centroid[0]), int(new_centroid[1])),
+                    radius=new_radius,
                     label=self.get_new_label(),
                     state="temp",
-                    age=1
-                ))
+                    age=1,
+                    expansion_rate=0.0
+                )
+
+                colony.kf_centroid = np.array(new_centroid, dtype=float)
+                colony.kf_radius = new_radius
+                colony.kf_expansion_rate = 0.0
+
+                curr_dish.colonies.append(colony)
 
 
             # 8. update dish count and draw tracked colonies

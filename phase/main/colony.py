@@ -14,33 +14,60 @@ class Colony:
     expansion_rate: float = 0.0
 
     # Kalman filter fields
+    kf_centroid: np.ndarray = field(init=False)
     kf_radius: float = field(init=False)
-    P: float = 1.0      # uncertainty in prediction
-    Q: float = 0.1      # process noise
-    R: float = 0.5      # measurment noise
+    kf_expansion_rate: float = field(init=False)
+    P: np.ndarray = field(default_factory=lambda: np.eye(4))  # covariance for [x, y, radius, expansion_rate]
+    Q: np.ndarray = field(default_factory=lambda: np.diag([0.05, 0.05, 0.2, 0.02]))  # process noise
+    R: np.ndarray = field(default_factory=lambda: np.diag([0.4, 0.4, 0.02, 0.05]))  # measurement noise
 
     def __post_init__(self):
-        # after detection sets predicted radius = detected radius
+        self.kf_centroid = np.array(self.centroid, dtype=float)
         self.kf_radius = self.radius
-
+        self.kf_expansion_rate = self.expansion_rate
 
     def kalman_predict(self):
-        # predicts change in radius
-        self.kf_radius += self.expansion_rate
-        # uncertainty grows by process noise before seeing the measurment
-        self.P += self.Q 
+        """
+        Predict next state:
+        - radius grows by expansion_rate
+        - centroid assumed stationary
+        - uncertainty grows by process noise Q
+        """
+        self.kf_radius += self.kf_expansion_rate
+        self.P += self.Q
 
-    def kalman_update(self, measurement: float):
-        # K determines how much we trust the measurement vs prediction
-        # if P > R, we trust measurement more -> K ~ 1
-        # if P < R, we trust prediction more -> K ~ 0
-        K = self.P / (self.P + self.R)
+    def kalman_update(self, measured_radius: float, measured_centroid: tuple[int, int]):
+        """
+        Update state using measurements:
+        - measured_radius: detected radius
+        - measured_centroid: detected centroid
+        - expansion_rate is smoothed implicitly
+        """
+        # measurement vector: [x, y, radius, dr]
+        dr_measure = measured_radius - self.kf_radius
+        z = np.array([measured_centroid[0], measured_centroid[1], measured_radius, dr_measure])
 
-        # predicted radius is updated by measurement, weighted by K
-        self.kf_radius += K * (measurement - self.kf_radius)
+        # predicted state vector
+        x_pred = np.array([self.kf_centroid[0], self.kf_centroid[1], self.kf_radius, self.kf_expansion_rate])
 
-        # uncertainty reduced after incorporating measurement (opposite of kalman_predict)
-        self.P *= (1 - K)
+        # Kalman gain
+        S = self.P + self.R
+        K = self.P @ np.linalg.inv(S)
+
+        # state update
+        x_new = x_pred + K @ (z - x_pred)
+
+        self.kf_centroid = x_new[:2]
+        self.kf_radius = x_new[2]
+        self.kf_expansion_rate = x_new[3]
+
+        # covariance update
+        self.P = (np.eye(4) - K) @ self.P
+
+        # sync standard attributes
+        self.centroid = tuple(self.kf_centroid)
+        self.radius = self.kf_radius
+        self.expansion_rate = self.kf_expansion_rate
 
     @staticmethod
     def cost_function_iou_circle(prev_colony: Colony, curr_blob) -> float:
