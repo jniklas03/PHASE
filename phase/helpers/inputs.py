@@ -7,6 +7,9 @@ from pathlib import Path
 from dataclasses import dataclass
 import tempfile
 import uuid
+import shutil
+
+TMP_DIR = Path(tempfile.gettempdir()) / "phase_temp"
 
 def read_img(source):
     """
@@ -176,10 +179,8 @@ def show_image(
 @dataclass
 class Image:
     path: Path
-
     def __init__(self, source: np.ndarray | str | Path):
-        tmp_dir = Path(tempfile.gettempdir()) / "phase_temp"
-        tmp_dir.mkdir(exist_ok=True)
+        TMP_DIR.mkdir(exist_ok=True)
 
         if isinstance(source, (str, Path)):
             source = Path(source)
@@ -187,12 +188,12 @@ class Image:
             if source.suffix.lower() in [".png", ".jpg", ".jpeg"]:
                 img = cv.imread(str(source), cv.IMREAD_UNCHANGED)
 
-                self.path = tmp_dir / f"{uuid.uuid4().hex}.npy"
+                self.path = TMP_DIR / f"{uuid.uuid4().hex}.npy"
                 np.save(self.path, img)
             else:
                 raise TypeError("Image type unknown. Expects '.png', '.jpg', '.jpeg'")
         elif isinstance(source, np.ndarray):
-            self.path = tmp_dir / f"{uuid.uuid4().hex}.npy"
+            self.path = TMP_DIR / f"{uuid.uuid4().hex}.npy"
             np.save(self.path, source)
 
         else:
@@ -204,15 +205,24 @@ class Image:
             arr = arr.astype(dtype)
         return arr
 
-    def load(self) -> np.ndarray:
-        return np.load(self.path, allow_pickle=False, mmap_mode="r")
-
-    def export(self, path: Path):
-        cv.imwrite(str(path), self.load())
-
     def __del__(self):
         if self.path and self.path.exists():
             try:
                 self.path.unlink()
             except Exception:
                 pass
+        
+    @staticmethod
+    def clear_tmp_dir():
+        if TMP_DIR.exists():
+            for item in TMP_DIR.iterdir():
+                if item.is_file() or item.is_symlink():
+                    item.unlink()
+                elif item.is_dir():
+                    shutil.rmtree(item)
+
+    def load(self) -> np.ndarray:
+        return np.load(self.path, allow_pickle=False, mmap_mode="r")
+
+    def export(self, path: Path):
+        cv.imwrite(str(path), self.load())
