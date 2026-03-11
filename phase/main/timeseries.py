@@ -17,7 +17,7 @@ from .frame import Frame
 from .colony import Colony, CostFunction
 from .dish import Dish
 
-from ..helpers.inputs import read_time, Image, TMP_DIR
+from ..helpers.inputs import read_time, Image
 
 @dataclass
 class Timeseries:
