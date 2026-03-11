@@ -4,19 +4,20 @@ from pathlib import Path
 import numpy as np
 import cv2 as cv
 from tqdm import tqdm
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-from scipy.optimize import linear_sum_assignment
-from scipy.spatial import KDTree
 from concurrent.futures import ThreadPoolExecutor
-
-from scipy.signal import savgol_filter
+from scipy.spatial import KDTree
+# from scipy.optimize import linear_sum_assignment
+# from scipy.signal import savgol_filter
 
 from .frame import Frame
 from .colony import Colony, CostFunction
 from .dish import Dish
 
-from ..helpers.inputs import read_time, Image
+from ..helpers.inputs import read_time, Image, TMP_DIR
 
 @dataclass
 class Timeseries:
@@ -504,7 +505,6 @@ class Timeseries:
                 if dish.tracked_detection is not None:
                     cv.imwrite(str(save_path / "tracked_detection" / f"{frame.name}_dish{dish.label}.png"), dish.tracked_detection.load())
 
-        
         with ThreadPoolExecutor() as ex:
             list(tqdm(
                 ex.map(_save_images, self.frames),
@@ -560,3 +560,65 @@ class Timeseries:
         plt.tight_layout()
         plt.savefig(save_path / "plots" / file_name)
         plt.close()
+    
+    def export_stats(self):
+        rows = []
+
+        for frame_idx, frame in tqdm(enumerate(self.frames), desc="Exporting data"):
+            for dish in frame.dishes:
+                for col in dish.colonies:
+                    rows.append({
+                    "timeseries": self.name,
+                    "frame": frame_idx,
+                    "timestamp": frame.timestamp,
+                    "dish": dish.label,
+                    "colony_id": col.label,
+                    "x": col.centroid[0],
+                    "y": col.centroid[1],
+                    "radius": col.radius,
+                    "state": col.state,
+                    "expansion_rate": col.expansion_rate,
+                    "age": col.age
+                })
+        
+        return rows
+
+    def export_stats_parallel(self):
+
+        def _export_worker(args):
+            frame_idx, frame = args
+            worker_rows = []
+            for dish in frame.dishes:
+                for col in dish.colonies:
+                    worker_rows.append({
+                    "timeseries": self.name,
+                    "frame": frame_idx,
+                    "timestamp": frame.timestamp,
+                    "dish": dish.label,
+                    "colony_id": col.label,
+                    "x": col.centroid[0],
+                    "y": col.centroid[1],
+                    "radius": col.radius,
+                    "state": col.state,
+                    "expansion_rate": col.expansion_rate,
+                    "age": col.age
+                })
+                    
+            return worker_rows
+    
+        with ThreadPoolExecutor() as ex:
+            worker_results = list(tqdm(
+                ex.map(_export_worker, enumerate(self.frames)),
+                total=len(self.frames),
+                desc="Exporting stats"
+            ))
+
+        rows = [row for sublist in worker_results for row in sublist]
+
+        return rows
+
+    def delete(self):
+        self.fg_masks = None
+        self.bg_masks = None
+        self.frames.clear()
+        Image.clear_tmp_dir()
