@@ -35,7 +35,9 @@ class Run:
             min_lost_radius=2,
             cost_function: CostFunction = CostFunction.IOU_CIRCLE,
             verbosity=0,
-            save_path: str | Path = ""
+            save_path: str | Path = "",
+            max_images: int | None = None,
+            sample_fraction: float | None = None
         ):
         directory = Path(directory)
 
@@ -46,7 +48,7 @@ class Run:
             if item.is_dir():
                 save_dir = (save_path / item.name)
                 save_dir.mkdir(parents=True, exist_ok=True)
-                ts = Timeseries.from_directory(f"{item.name}", item)
+                ts = Timeseries.from_directory(f"{item.name}", item, max_images, sample_fraction)
                 ts.generate_dishes_timeseries(use_stencil=use_stencil)
                 ts.preprocess_timeseries(use_bg_mask=use_bg_mask, use_fg_mask=use_fg_mask, use_area_filter=use_area_filter)
                 ts.detect_timeseries(detection_threshold=detection_threshold, distance_threshold=distance_threshold, min_lost_radius=min_lost_radius, cost_function=cost_function, verbosity=verbosity)

@@ -59,7 +59,7 @@ class Timeseries:
     next_label: int = 0
 
     @classmethod
-    def from_directory(cls: type["Timeseries"], name:str, directory: str | Path):
+    def from_directory(cls: type["Timeseries"], name:str, directory: str | Path, max_images: int | None = None, sample_fraction: float | None = None):
         """
         alternative constructor to create a timeseries from a directory
 
@@ -75,37 +75,42 @@ class Timeseries:
         Timeseries object
         """
         timeseries = cls(name=name)
-        timeseries.load_timeseries(directory)
+        timeseries.load_timeseries(directory, max_images, sample_fraction)
         return timeseries
 
-    def load_timeseries(self, directory: str | Path):
-        """
-        load all image files (.jpg, .jpeg, .png) from a directory into frames objects
-
-        parameters
-        ----------
-        directory : str | Path
-            directory containing images
-        """
+    def load_timeseries(self, directory: str | Path, max_images: int | None = None, sample_fraction: float | None = None):
         directory = Path(directory)
-
         if not directory.is_dir():
             raise TypeError("directory must be a string of directory path (str or Path).")
-        
+
+        if sample_fraction is not None and not (0 < sample_fraction <= 1):
+            raise ValueError("fraction must be between 0 and 1.")
+
         valid_extensions = {".jpg", ".jpeg", ".png"}
-        
-        for item in tqdm(sorted(directory.iterdir()), desc="Loading frames"): # sorts all entries from given directory
-            if item.is_file() and item.suffix.lower() in valid_extensions:
-                timestamp = read_time(item.name)
+        all_items = sorted([f for f in directory.iterdir() if f.is_file() and f.suffix.lower() in valid_extensions])
 
-                frame = Frame(
-                    name=item.stem,
-                    timestamp=timestamp,
-                    image=Image(item)
-                )
+        if max_images is not None and max_images < len(all_items):
+            # Use n_max_images for uniform sampling
+            indices = np.linspace(0, len(all_items) - 1, max_images, dtype=int)
+            selected_items = [all_items[i] for i in indices]
+        elif sample_fraction is not None and sample_fraction < 1.0:
+            # Use fraction for uniform sampling
+            n_to_load = max(1, int(len(all_items) * sample_fraction))
+            indices = np.linspace(0, len(all_items) - 1, n_to_load, dtype=int)
+            selected_items = [all_items[i] for i in indices]
+        else:
+            # Load all images
+            selected_items = all_items
 
-                self.frames.append(frame)
-    
+        for item in tqdm(selected_items, desc="Loading frames"):
+            timestamp = read_time(item.name)
+            frame = Frame(
+                name=item.stem,
+                timestamp=timestamp,
+                image=Image(item)
+            )
+            self.frames.append(frame)
+
     def generate_dishes_timeseries(self, use_stencil: bool = True):
         """
         populate dishes in each frame of the timeseries
