@@ -23,6 +23,7 @@ dist/
 *.coverage
 .coverage
 .pytest_cache/
+saved
 temp_save
 
 # Other

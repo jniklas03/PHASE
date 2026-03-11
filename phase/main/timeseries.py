@@ -4,17 +4,20 @@ from pathlib import Path
 import numpy as np
 import cv2 as cv
 from tqdm import tqdm
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-from scipy.optimize import linear_sum_assignment
-from scipy.signal import savgol_filter
+from concurrent.futures import ThreadPoolExecutor
+from scipy.spatial import KDTree
+# from scipy.optimize import linear_sum_assignment
+# from scipy.signal import savgol_filter
 
 from .frame import Frame
 from .colony import Colony, CostFunction
 from .dish import Dish
 
-from ..helpers.inputs import read_time
-
+from ..helpers.inputs import read_time, Image, TMP_DIR
 
 @dataclass
 class Timeseries:
@@ -54,9 +57,9 @@ class Timeseries:
     fg_masks: list[np.ndarray] | None = None
     bg_masks: list[np.ndarray] | None = None
     next_label: int = 0
-    
+
     @classmethod
-    def from_directory(cls: type["Timeseries"], name:str, directory: str | Path):
+    def from_directory(cls: type["Timeseries"], name:str, directory: str | Path, max_images: int | None = None, sample_fraction: float | None = None):
         """
         alternative constructor to create a timeseries from a directory
 
@@ -72,38 +75,43 @@ class Timeseries:
         Timeseries object
         """
         timeseries = cls(name=name)
-        timeseries.load_timeseries(directory)
+        timeseries.load_timeseries(directory, max_images, sample_fraction)
         return timeseries
 
-    def load_timeseries(self, directory: str | Path, populate_frames=True):
-        """
-        load all image files (.jpg, .jpeg, .png) from a directory into frames objects
-
-        parameters
-        ----------
-        directory : str | Path
-            directory containing images
-        """
+    def load_timeseries(self, directory: str | Path, max_images: int | None = None, sample_fraction: float | None = None):
         directory = Path(directory)
-
         if not directory.is_dir():
             raise TypeError("directory must be a string of directory path (str or Path).")
-        
+
+        if sample_fraction is not None and not (0 < sample_fraction <= 1):
+            raise ValueError("fraction must be between 0 and 1.")
+
         valid_extensions = {".jpg", ".jpeg", ".png"}
-        
-        for item in tqdm(sorted(directory.iterdir()), desc="Loading frames"): # sorts all entries from given directory
-            if item.is_file() and item.suffix.lower() in valid_extensions:
-                timestamp = read_time(item.name)
+        all_items = sorted([f for f in directory.iterdir() if f.is_file() and f.suffix.lower() in valid_extensions])
 
-                frame = Frame(
-                    name=item.stem,
-                    timestamp=timestamp,
-                    image_path=Path(item)
-                )
+        if max_images is not None and max_images < len(all_items):
+            # Use n_max_images for uniform sampling
+            indices = np.linspace(0, len(all_items) - 1, max_images, dtype=int)
+            selected_items = [all_items[i] for i in indices]
+        elif sample_fraction is not None and sample_fraction < 1.0:
+            # Use fraction for uniform sampling
+            n_to_load = max(1, int(len(all_items) * sample_fraction))
+            indices = np.linspace(0, len(all_items) - 1, n_to_load, dtype=int)
+            selected_items = [all_items[i] for i in indices]
+        else:
+            # Load all images
+            selected_items = all_items
 
-                self.frames.append(frame)
-    
-    def generate_dishes_timeseries(self, use_stencil: bool = True, del_image: bool = False):
+        for item in tqdm(selected_items, desc="Loading frames"):
+            timestamp = read_time(item.name)
+            frame = Frame(
+                name=item.stem,
+                timestamp=timestamp,
+                image=Image(item)
+            )
+            self.frames.append(frame)
+
+    def generate_dishes_timeseries(self, use_stencil: bool = True):
         """
         populate dishes in each frame of the timeseries
 
@@ -115,6 +123,14 @@ class Timeseries:
         if not self.frames:
             raise ValueError("Timeseries has no frames to populate.")
 
+        def _populate_frame(frame, stencils):
+            frame.populate_frame_from_crop(stencils)
+            return frame
+
+        def _populate_frame_no_crop(frame):
+            frame.populate_frame()
+            return _populate_frame
+
         if use_stencil:
             # populate first frame
             self.frames[0].populate_frame()
@@ -122,16 +138,21 @@ class Timeseries:
             # use first frame as stencil for all frames
             stencils = self.frames[0].dishes
 
-            for frame in tqdm(self.frames, desc="Generating dishes"):
-                frame.populate_frame_from_crop(stencils)
-                if del_image:
-                    frame.image = None
+            with ThreadPoolExecutor() as ex:
+                self.frames = list(tqdm(
+                    ex.map(lambda f: _populate_frame(f, stencils), self.frames[1:]),
+                    total=len(self.frames[1:]),
+                    desc="Generating dishes"
+                ))
+
         else:
             # populate each frame independently
-            for frame in tqdm(self.frames, desc="Generating dishes"):
-                frame.populate_frame()
-                if del_image:
-                    frame.image = None
+            with ThreadPoolExecutor() as ex:
+                self.frames = list(tqdm(
+                    ex.map(lambda f: _populate_frame_no_crop(), self.frames),
+                    total=len(self.frames),
+                    desc="Generating dishes"
+                ))
     
     def make_masks(self, n=5):
         """
@@ -142,19 +163,40 @@ class Timeseries:
         n : int, optional
             number of initial frames used to compute background masks (default 5).
         """
+
         # foreground mask from last frame
-        fg_masks = []
-        for dish in tqdm(self.frames[-1].dishes, desc="Making foreground masks"):
-            fg_mask = dish.isolate_fg()
-            fg_masks.append(fg_mask)
+        def _make_fg_mask(dish):
+            return dish.label, dish.isolate_fg()
+
+        with ThreadPoolExecutor() as ex:
+            results = list(tqdm(
+                ex.map(_make_fg_mask, self.frames[-1].dishes),
+                total=len(self.frames[-1].dishes),
+                desc="Making foreground masks"
+            ))
+
+        fg_masks = [None] * len(results)
+        for label, mask in results:
+            fg_masks[label] = mask
+
 
         # bg mask from first n frames
+        def _make_bg_mask(dish):
+            return dish.label, dish.isolate_bg()
+
         frame_groups: dict[int, list[np.ndarray]] = defaultdict(list)
 
-        for frame in tqdm(self.frames[:n], desc="Making background masks"):
-            for dish in frame.dishes:
-                preprocessed = dish.isolate_bg()
-                frame_groups[dish.label].append(preprocessed)
+        dishes = [dish for frame in self.frames[:n] for dish in frame.dishes]
+
+        with ThreadPoolExecutor() as ex:
+            results = list(tqdm(
+                ex.map(_make_bg_mask, dishes),
+                total=len(dishes),
+                desc="Making background masks"
+            ))
+
+        for label, mask in results:
+            frame_groups[label].append(mask)
 
         bg_masks = []
 
@@ -193,15 +235,23 @@ class Timeseries:
         if use_bg_mask or use_fg_mask:
             self.make_masks(n=n)
 
-        for frame in tqdm(self.frames, desc="Preprocessing frames"):
+        def _preprocess_frame(frame):
             for dish in frame.dishes:
-                dish.preprocessed = dish.preprocess_dish(
+                dish.preprocessed = Image(dish.preprocess_dish(
                     fg_mask=self.fg_masks[dish.label] if use_fg_mask else None,
                     bg_mask=self.bg_masks[dish.label] if use_bg_mask else None,
                     use_bg_mask=use_bg_mask,
                     use_fg_mask=use_fg_mask,
                     use_area_filter=use_area_filter
-                )
+                ))
+            return frame
+        
+        with ThreadPoolExecutor() as ex:
+            list(tqdm(
+                ex.map(_preprocess_frame, self.frames),
+                total=len(self.frames),
+                desc="Preprocessing frames"
+            ))
 
     def detect_timeseries_old(self):
         for frame in tqdm(self.frames, desc="Detecting colonies"):
@@ -221,14 +271,17 @@ class Timeseries:
 
     def detect_timeseries(
             self,
-            threshold = 0.9,
+            detection_threshold = 0.99,
+            distance_threshold = 10,
             verbosity = 0,
             cost_function: CostFunction = CostFunction.IOU_CIRCLE,
-            min_lost_radius = 1
+            min_lost_radius = 2
             ):
+
         # 1. init first frame colonies
         for dish in self.frames[0].dishes:
             blobs = dish.detect_colonies()
+
             for blob in blobs:
                 dish.colonies.append(Colony(
                     centroid=(int(blob.pt[0]), int(blob.pt[1])),
@@ -239,342 +292,170 @@ class Timeseries:
                     age=1
                 ))
 
-        # 2. iterate over subsequent frames
+        # worker function for parallelisation
+        def _track_dish(prev_dish, curr_dish, detection_threshold, distance_threshold, cost_function, min_lost_radius, verbosity):
+
+            # previous colonies get loaded in
+            prev_cols = prev_dish.colonies
+
+            # current colonies get initialised / cleared
+            curr_dish.colonies = []
+
+            # 2. apply growth extrapolation to previously lost colonies, mask them, and detect colonies for current dish
+            lost_mask = np.zeros_like(prev_dish.preprocessed.load())
+
+            for col in prev_cols:
+                if col.state == "lost":
+
+                    col.kalman_predict()
+
+                    r = max(int(col.kf_radius), 1) # failsafe: minimum radius of 1
+                    x, y = int(col.kf_centroid[0]), int(col.kf_centroid[1])
+                    
+                    cv.circle(lost_mask, (x, y), r, 255, -1)
+
+            preprocessed_masked = cv.bitwise_and(
+                curr_dish.preprocessed.load(),
+                cv.bitwise_not(lost_mask)
+            )
+
+            curr_blobs, _ = Dish.colony_detection(
+                preprocessed_masked,
+                curr_dish.crop.load()
+            )
+
+            curr_dish.preprocessed_masked = Image(preprocessed_masked)
+
+            # 3. make candidate pairs using KDTree (prev_blobs x curr_blobs) (replacement of hungarian)
+            n, m = len(prev_cols), len(curr_blobs)
+            matches = []
+
+            if n > 0 and m > 0:
+
+                curr_centroids = np.array([b.pt for b in curr_blobs])
+
+                tree = KDTree(curr_centroids)
+
+                candidate_pairs = []
+
+                # distance gating
+                for i, prev_col in enumerate(prev_cols):
+
+                    neighbors = tree.query_ball_point(prev_col.centroid, distance_threshold)
+
+                    for j in neighbors:
+
+                        cost = cost_function(prev_col, curr_blobs[j])
+
+                        if cost < detection_threshold:
+                            candidate_pairs.append((cost, i, j))
+
+                # sorting (lowest cost first)
+                candidate_pairs.sort()
+
+                used_prev = set()
+                used_curr = set()
+
+                for cost, i, j in candidate_pairs:
+
+                    if i not in used_prev and j not in used_curr:
+                        matches.append((i, j))
+                        used_prev.add(i)
+                        used_curr.add(j)
+
+            # 4. assignment
+            matched_prev = [prev_cols[r] for r, _ in matches]
+            matched_curr = [curr_blobs[c] for _, c in matches]
+
+            matched_prev_idx = {r for r, _ in matches}
+            matched_curr_idx = {c for _, c in matches}
+
+            unmatched_prev = [prev_cols[i] for i in range(n) if i not in matched_prev_idx] # colonies that disappeared
+            unmatched_curr = [curr_blobs[j] for j in range(m) if j not in matched_curr_idx] # colonies that newly appeared
+
+            # 5. link matched colonies
+            for prev_col, curr_blob in zip(matched_prev, matched_curr):
+                measured_radius = float(curr_blob.size / 2)
+                measured_centroid = curr_blob.pt
+
+                # update Kalman filter with new measurement
+                prev_col.kalman_update(measured_radius, measured_centroid)
+
+                curr_dish.colonies.append(Colony(
+                    centroid=(int(prev_col.kf_centroid[0]), int(prev_col.kf_centroid[1])),
+                    radius=prev_col.kf_radius,
+                    label=prev_col.label,
+                    state="perm",
+                    age=prev_col.age + 1,
+                    expansion_rate=prev_col.kf_expansion_rate,
+                    P=prev_col.P,
+                    Q=prev_col.Q,
+                    R=prev_col.R
+                ))
+
+            # 6. newly lost colony handling
+            for col in unmatched_prev:
+                if col.radius >= min_lost_radius:
+                    max_growth_per_frame = 1.5
+                    col.kf_radius += min(col.kf_expansion_rate, max_growth_per_frame)
+
+                    col.kf_expansion_rate *= 0.65
+
+                    curr_dish.colonies.append(Colony(
+                        centroid=(int(col.kf_centroid[0]), int(col.kf_centroid[1])),
+                        radius=col.kf_radius,
+                        label=col.label,
+                        state="lost",
+                        age=col.age,
+                        expansion_rate=col.kf_expansion_rate,
+                        P=col.P,
+                        Q=col.Q,
+                        R=col.R
+                    ))
+
+            # 7. add new colonies
+            for blob in unmatched_curr:
+                new_radius = float(blob.size / 2)
+                new_centroid = blob.pt
+
+                colony = Colony(
+                    centroid=(int(new_centroid[0]), int(new_centroid[1])),
+                    radius=new_radius,
+                    label=self.get_new_label(),
+                    state="temp",
+                    age=1,
+                    expansion_rate=0.0
+                )
+
+                colony.kf_centroid = np.array(new_centroid, dtype=float)
+                colony.kf_radius = new_radius
+                colony.kf_expansion_rate = 0.0
+
+                curr_dish.colonies.append(colony)
+
+
+            # 8. update dish count and draw tracked colonies
+            curr_dish.count = len(curr_dish.colonies)
+
+            curr_dish.draw_tracked_colonies(verbosity=verbosity)
+
+            return curr_dish
+
+        # iteratation over [1:] frames with worker
         for n in tqdm(range(1, len(self.frames)), desc="Tracking colonies"):
+
             prev_frame = self.frames[n - 1]
             curr_frame = self.frames[n]
 
-            for prev_dish, curr_dish in zip(prev_frame.dishes, curr_frame.dishes):
+            with ThreadPoolExecutor() as ex:
 
-                # previous colonies get loaded in
-                prev_cols = prev_dish.colonies
-                # current colonies get initialised / cleared
-                curr_dish.colonies = []
-
-        # 3. apply growth extrapolation to previously lost colonies, mask them, and detect colonies for current dish
-                lost_mask = np.zeros_like(prev_dish.preprocessed)
-
-                for col in prev_cols:
-                    if col.state == "lost":
-                        col.kalman_predict()
-                        r = max(int(col.kf_radius), 1) # failsafe: minimium radius of 1
-                        x, y = int(col.centroid[0]), int(col.centroid[1])
-
-                        cv.circle(lost_mask, (x, y), r, 255, -1)
-            
-                preprocessed_masked = cv.bitwise_and(
-                    curr_dish.preprocessed,
-                    cv.bitwise_not(lost_mask)
-                )
-
-                curr_blobs, _ = Dish.colony_detection(
-                    preprocessed_masked,
-                    curr_dish.crop
-                )
-
-                curr_dish.preprocessed_masked = preprocessed_masked
-
-        # 4. make cost matrix (prev_blobs x curr_blobs) / run hungarian algorithm
-                n, m = len(prev_cols), len(curr_blobs)
-                matches = [] # clear matches for each dish
-
-                if n > 0 and m > 0:
-                    cost_matrix = np.zeros((n,m))
-
-                    # calculating cost between each blob
-                    for i, prev_colony in enumerate(prev_cols):
-                        for j, curr_blob in enumerate(curr_blobs):
-                            cost_matrix[i, j] = cost_function(prev_colony, curr_blob)
-
-                    row_idx, col_idx = linear_sum_assignment(cost_matrix)
-
-                    # thresholding
-                    for row, col in zip(row_idx, col_idx):
-                        if cost_matrix[row, col] < threshold:
-                            matches.append((row, col))
-
-                # assignment
-                matched_prev = [prev_cols[r] for r, _ in matches]
-                matched_curr = [curr_blobs[c] for _, c in matches]
-
-                unmatched_prev = [prev_cols[i] for i in range(n) if i not in {r for r, _ in matches}] # colonies that disappeared
-                unmatched_curr = [curr_blobs[j] for j in range(m) if j not in {c for _, c in matches}] # colonies that newly appeared
-
-        # 5. link matched colonies
-                for prev_col, curr_blob in zip(matched_prev, matched_curr):
-                    curr_radius = float(blob.size / 2)
-
-                    # expansion_rate calculation
-                    prev_col.kalman_update(curr_radius)
-                    expansion_rate = prev_col.kf_radius - prev_col.radius
-
-                    curr_dish.colonies.append(Colony(
-                        centroid=(int(curr_blob.pt[0]), int(curr_blob.pt[1])),
-                        radius=float(curr_blob.size / 2),
-                        label=prev_col.label, # links labels
-                        state="perm", # updates state to permanent
-                        age=prev_col.age + 1, # increments age
-                        expansion_rate=expansion_rate,
-                        P=prev_col.P,
-                        Q=prev_col.Q,
-                        R=prev_col.R,
-                    ))
-        
-        # 6. newly lost colony handling
-                for i, col in enumerate(unmatched_prev):
-                    # area filtering to prevent noise from persisting
-                    if col.radius >= min_lost_radius:
-                        col.kalman_predict()
-                        predicted_radius = col.kf_radius
-
-                        curr_dish.colonies.append(Colony(
-                            centroid=col.centroid,
-                            radius=predicted_radius,
-                            label=col.label,
-                            state="lost", # changes state to lost
-                            age=prev_col.age, # keeps age static
-                            expansion_rate=col.expansion_rate,
-                            P=col.P,
-                            Q=col.Q,
-                            R=col.R
-                        ))
-        # 7. add new colonies
-                for i, blob in enumerate(unmatched_curr):
-                    curr_dish.colonies.append(Colony(
-                        centroid=(int(blob.pt[0]), int(blob.pt[1])),
-                        radius=float(blob.size / 2),
-                        label=self.get_new_label(),
-                        state="temp",
-                        age=1
-                    ))
-        # 8. update dish count and draw tracked colonies
-                curr_dish.count = len(curr_dish.colonies)
-                curr_dish.draw_tracked_colonies(verbosity=verbosity)
-
-    # def export_stats(self):
-    #     """
-    #     1. line plot radius vs time, with different colors for different dishes, and SD
-    #     2. expansion rate vs time
-    #     3. final radius boxplot
-    #     """
-    #     frame_stats = {frame.timestamp: {""} for frame in self.frames}
-    #     for frame in self.frames:
-    #         dish_stats = {dish.label: {"counts": [], "radius": [], "expansion_rate": []} for dish in frame.dishes}
-
-    #     for frame in self.frames:
-    #         for dish in frame.dishes:
-    #             count = len(dish.colonies) if dish.colonies is not None else 0
-    #             dish_data[dish.label]["times"].append(frame.timestamp)
-    #             dish_data[dish.label]["counts"].append(count)
-
-    # def plot_growth_panels(self,
-    #                     save_path: str = "",
-    #                     file_name: str = "colony_growth_panels.png",
-    #                     smooth_window: int = 7,
-    #                     poly_order: int = 2):
-
-    #     assert self.frames, "Timeseries has no frames to plot."
-
-    #     save_path = Path(save_path)
-    #     (save_path / "plots").mkdir(parents=True, exist_ok=True)
-
-    #     frames = sorted(self.frames, key=lambda f: f.timestamp)
-    #     first_frame = frames[0]
-    #     n_dishes = len(first_frame.dishes)
-
-    #     cmap = cm.get_cmap("tab10", n_dishes)
-    #     colors = [cmap(i) for i in range(n_dishes)]
-
-    #     # Convert timestamps → hours since experiment start
-    #     t0 = frames[0].timestamp
-
-    #     dish_data = {
-    #         dish.label: {
-    #             "times": [],
-    #             "mean_radius": [],
-    #             "std_radius": [],
-    #             "smoothed_radius": [],
-    #             "dRdt": [],
-    #             "final_radii": []
-    #         }
-    #         for dish in first_frame.dishes
-    #     }
-
-    #     # --------------------------------
-    #     # Collect mean radius (perm only)
-    #     # --------------------------------
-    #     for frame in frames:
-
-    #         t_rel = (frame.timestamp - t0).total_seconds() / 3600.0
-
-    #         for dish in frame.dishes:
-
-    #             perm_colonies = [
-    #                 c for c in dish.colonies
-    #                 if dish.colonies and getattr(c, "state", None) == "perm"
-    #             ]
-
-    #             radii = [c.radius for c in perm_colonies]
-    #             label = dish.label
-
-    #             dish_data[label]["times"].append(t_rel)
-
-    #             if radii:
-    #                 dish_data[label]["mean_radius"].append(np.mean(radii))
-    #                 dish_data[label]["std_radius"].append(np.std(radii))
-    #             else:
-    #                 dish_data[label]["mean_radius"].append(np.nan)
-    #                 dish_data[label]["std_radius"].append(np.nan)
-
-    #     # --------------------------------
-    #     # Smooth + compute derivative
-    #     # --------------------------------
-    #     for label, data in dish_data.items():
-
-    #         times = np.array(data["times"], dtype=float)
-    #         mean_r = np.array(data["mean_radius"], dtype=float)
-
-    #         smoothed = np.full_like(mean_r, np.nan)
-    #         dRdt = np.full_like(mean_r, np.nan)
-
-    #         valid = ~np.isnan(mean_r)
-
-    #         if np.sum(valid) >= 5:
-
-    #             t_valid = times[valid]
-    #             r_valid = mean_r[valid]
-
-    #             # Ensure odd window size and not larger than data
-    #             window = min(smooth_window, len(r_valid))
-    #             if window % 2 == 0:
-    #                 window -= 1
-    #             if window < 3:
-    #                 window = 3
-
-    #             # Smooth radius
-    #             r_smooth = savgol_filter(r_valid,
-    #                                     window_length=window,
-    #                                     polyorder=min(poly_order, window - 1))
-
-    #             # Derivative of smoothed curve
-    #             dR = savgol_filter(r_valid,
-    #                             window_length=window,
-    #                             polyorder=min(poly_order, window - 1),
-    #                             deriv=1,
-    #                             delta=np.mean(np.diff(t_valid)))
-
-    #             smoothed[valid] = r_smooth
-    #             dRdt[valid] = dR
-
-    #         data["smoothed_radius"] = smoothed
-    #         data["dRdt"] = dRdt
-
-    #     # --------------------------------
-    #     # Find first time where ANY dish has perm data
-    #     # --------------------------------
-    #     first_valid_time = np.inf
-    #     for data in dish_data.values():
-    #         times = np.array(data["times"])
-    #         mean_r = np.array(data["mean_radius"])
-    #         valid = ~np.isnan(mean_r)
-    #         if np.any(valid):
-    #             first_valid_time = min(first_valid_time, times[valid][0])
-
-    #     # --------------------------------
-    #     # Final radii
-    #     # --------------------------------
-    #     final_frame = frames[-1]
-    #     for dish in final_frame.dishes:
-    #         perm_colonies = [
-    #             c for c in dish.colonies
-    #             if dish.colonies and getattr(c, "state", None) == "perm"
-    #         ]
-    #         dish_data[dish.label]["final_radii"] = [c.radius for c in perm_colonies]
-
-    #     # --------------------------------
-    #     # Create figure
-    #     # --------------------------------
-    #     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-
-    #     # ---------------- Panel A — Radius vs Time (scatter) ----------------
-    #     ax = axes[0]
-
-    #     for idx, (label, data) in enumerate(dish_data.items()):
-    #         times = np.array(data["times"])
-    #         mean_r = np.array(data["mean_radius"])
-    #         smoothed = np.array(data["smoothed_radius"])
-
-    #         valid = ~np.isnan(mean_r)
-
-    #         # Scatter actual datapoints
-    #         ax.scatter(times[valid],
-    #                 mean_r[valid],
-    #                 color=colors[idx],
-    #                 s=25,
-    #                 alpha=0.8,
-    #                 label=f"Dish {label+1}")
-
-    #         # Optional: faint smoothed curve behind points
-    #         ax.plot(times[valid],
-    #                 smoothed[valid],
-    #                 color=colors[idx],
-    #                 alpha=0.4,
-    #                 linewidth=1.5)
-
-    #     ax.set_xlim(left=first_valid_time)
-    #     ax.set_xlabel("Time (hours)")
-    #     ax.set_ylabel(r"$R(t)$")
-    #     ax.set_title("A) Radius vs Time")
-    #     ax.grid(True)
-
-    #     # Panel B — Smoothed Derivative
-    #     ax = axes[1]
-    #     for idx, (label, data) in enumerate(dish_data.items()):
-    #         ax.plot(data["times"],
-    #                 data["dRdt"],
-    #                 color=colors[idx],
-    #                 label=f"Dish {label+1}")
-
-    #     ax.set_xlim(left=first_valid_time)
-    #     ax.set_xlabel("Time (hours)")
-    #     ax.set_ylabel("dR/dt")
-    #     ax.set_title("B) Expansion Rate (smoothed)")
-    #     ax.grid(True)
-
-    #     # Panel C — Final distribution
-    #     ax = axes[2]
-
-    #     final_data = []
-    #     labels = []
-
-    #     for idx, (label, data) in enumerate(dish_data.items()):
-    #         final_data.append(data["final_radii"])
-    #         labels.append(f"D{label+1}")
-
-    #     box = ax.boxplot(final_data, patch_artist=True)
-
-    #     for patch, color in zip(box["boxes"], colors):
-    #         patch.set_facecolor(color)
-    #         patch.set_alpha(0.6)
-
-    #     ax.set_xticklabels(labels)
-    #     ax.set_ylabel("Final Radius (perm)")
-    #     ax.set_title("C) Final Radius Distribution")
-    #     ax.grid(True)
-
-    #     # Legend
-    #     handles = [
-    #         plt.Line2D([0], [0], color=colors[i], lw=2)
-    #         for i in range(n_dishes)
-    #     ]
-    #     fig.legend(handles,
-    #             [f"Dish {i+1}" for i in range(n_dishes)],
-    #             loc="upper center",
-    #             ncol=n_dishes)
-
-    #     plt.tight_layout(rect=[0, 0, 1, 0.92])
-    #     plt.savefig(save_path / "plots" / file_name, dpi=300)
-    #     plt.close()
+                list(ex.map(
+                    lambda args: _track_dish(*args),
+                    [
+                        (prev_dish, curr_dish, detection_threshold, distance_threshold, cost_function, min_lost_radius, verbosity)
+                        for prev_dish, curr_dish in zip(prev_frame.dishes, curr_frame.dishes)
+                    ]
+                ))
 
     def export_images(self, save_path: str | Path = ""):
         """
@@ -598,7 +479,7 @@ class Timeseries:
 
         # debug overlay for first frame
         first_frame = self.frames[0]
-        overlay = first_frame.image.copy()
+        overlay = first_frame.image.load().copy()
 
         for dish in first_frame.dishes:
             x, y = dish.centroid
@@ -611,19 +492,30 @@ class Timeseries:
 
         cv.imwrite(str(save_path / "dish_detection" / f"{first_frame.name}_debug.png"), overlay)
 
+        def _save_images(frame):
         # crops, preprocessed, detections
-        for frame in tqdm(self.frames, desc="Saving images"):
             for dish in frame.dishes:
                 if dish.crop is not None:
-                    cv.imwrite(str(save_path / "dish_detection" / f"{frame.name}_dish{dish.label}.png"), dish.crop)
+                    cv.imwrite(str(save_path / "dish_detection" / f"{frame.name}_dish{dish.label}.png"), dish.crop.load())
+
                 if dish.preprocessed is not None:
-                    cv.imwrite(str(save_path / "preprocessed" / f"{frame.name}_dish{dish.label}.png"), dish.preprocessed)
+                    cv.imwrite(str(save_path / "preprocessed" / f"{frame.name}_dish{dish.label}.png"), dish.preprocessed.load())
+
                 if dish.preprocessed_masked is not None:
-                    cv.imwrite(str(save_path / "preprocessed_masked" / f"{frame.name}_dish{dish.label}.png"), dish.preprocessed_masked)
+                    cv.imwrite(str(save_path / "preprocessed_masked" / f"{frame.name}_dish{dish.label}.png"), dish.preprocessed_masked.load())
+
                 if dish.initial_detection is not None:
-                    cv.imwrite(str(save_path / "initial_detection" / f"{frame.name}_dish{dish.label}.png"), dish.initial_detection)
+                    cv.imwrite(str(save_path / "initial_detection" / f"{frame.name}_dish{dish.label}.png"), dish.initial_detection.load())
+
                 if dish.tracked_detection is not None:
-                    cv.imwrite(str(save_path / "tracked_detection" / f"{frame.name}_dish{dish.label}.png"), dish.tracked_detection)
+                    cv.imwrite(str(save_path / "tracked_detection" / f"{frame.name}_dish{dish.label}.png"), dish.tracked_detection.load())
+
+        with ThreadPoolExecutor() as ex:
+            list(tqdm(
+                ex.map(_save_images, self.frames),
+                total=len(self.frames),
+                desc="Saving images"
+            ))
 
         # fg/bg masks
         if self.fg_masks is not None:
@@ -673,3 +565,65 @@ class Timeseries:
         plt.tight_layout()
         plt.savefig(save_path / "plots" / file_name)
         plt.close()
+    
+    def export_stats(self):
+        rows = []
+
+        for frame_idx, frame in tqdm(enumerate(self.frames), desc="Exporting data"):
+            for dish in frame.dishes:
+                for col in dish.colonies:
+                    rows.append({
+                    "timeseries": self.name,
+                    "frame": frame_idx,
+                    "timestamp": frame.timestamp,
+                    "dish": dish.label,
+                    "colony_id": col.label,
+                    "x": col.centroid[0],
+                    "y": col.centroid[1],
+                    "radius": col.radius,
+                    "state": col.state,
+                    "expansion_rate": col.expansion_rate,
+                    "age": col.age
+                })
+        
+        return rows
+
+    def export_stats_parallel(self):
+
+        def _export_worker(args):
+            frame_idx, frame = args
+            worker_rows = []
+            for dish in frame.dishes:
+                for col in dish.colonies:
+                    worker_rows.append({
+                    "timeseries": self.name,
+                    "frame": frame_idx,
+                    "timestamp": frame.timestamp,
+                    "dish": dish.label,
+                    "colony_id": col.label,
+                    "x": col.centroid[0],
+                    "y": col.centroid[1],
+                    "radius": col.radius,
+                    "state": col.state,
+                    "expansion_rate": col.expansion_rate,
+                    "age": col.age
+                })
+                    
+            return worker_rows
+    
+        with ThreadPoolExecutor() as ex:
+            worker_results = list(tqdm(
+                ex.map(_export_worker, enumerate(self.frames)),
+                total=len(self.frames),
+                desc="Exporting stats"
+            ))
+
+        rows = [row for sublist in worker_results for row in sublist]
+
+        return rows
+
+    def delete(self):
+        self.fg_masks = None
+        self.bg_masks = None
+        self.frames.clear()
+        Image.clear_tmp_dir()
