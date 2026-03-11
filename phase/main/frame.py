@@ -19,13 +19,9 @@ class Frame:
     dishes: list[Dish] = field(default_factory=list)
 
     def populate_frame(self):
-        self.image.load()
-
         self.dishes = dish_pipeline(source=self.image.load())
 
     def populate_frame_from_crop(self, stencils):
-        self.image.load()
-
         self.dishes = crop_dishes(self.image.load(), stencils)
 
 def detect_dishes(img: np.ndarray) -> list[Dish]:
