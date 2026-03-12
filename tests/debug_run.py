@@ -9,5 +9,5 @@ if __name__ == "__main__":
     r1.execute_run(
         directory=DIR,
         save_path=SAVE_DIR,
-        max_images=100
+        max_images=50
     )
