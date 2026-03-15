@@ -10,14 +10,13 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from concurrent.futures import ThreadPoolExecutor
 from scipy.spatial import KDTree
-# from scipy.optimize import linear_sum_assignment
-# from scipy.signal import savgol_filter
+from itertools import repeat
 
 from .frame import Frame
 from .colony import Colony, CostFunction
 from .dish import Dish
 
-from ..helpers.inputs import read_time, Image
+from ..helpers.inputs import read_time, Image, create_circular_mask
 
 @dataclass
 class Timeseries:
@@ -456,6 +455,169 @@ class Timeseries:
                         for prev_dish, curr_dish in zip(prev_frame.dishes, curr_frame.dishes)
                     ]
                 ))
+
+    def detect_timeseries_new(self,
+                distance_threshold: int = 10,
+                detection_threshold: float = 0.5,
+                min_lost_radius: int = 2,
+                cost_function: CostFunction = CostFunction.IOU_CIRCLE,
+                verbosity: int = 0
+                ):
+        # 1. init first frame colonies
+        for dish in self.frames[0].dishes:
+            blobs = dish.detect_colonies()
+
+            for blob in blobs:
+                dish.colonies.append(Colony(
+                    centroid=(int(blob.pt[0]), int(blob.pt[1])),
+                    radius=float(blob.size / 2),
+                    expansion_rate=0,
+                    label=self.get_new_label(), # getting unique label from timeseries
+                    state="temp",
+                    age=1
+                ))
+        
+        def _detect_worker(
+                prev_dish,
+                curr_dish,
+                distance_threshold = distance_threshold,
+                detection_threshold = detection_threshold,
+                min_lost_radius = min_lost_radius,
+                cost_function = cost_function,
+                verbosity = verbosity
+                ) -> Dish:
+            # 2. init prev and current colonies for dish pairs
+            prev_cols = prev_dish.colonies
+            curr_dish.colonies = []
+            
+            # 3. predict colony states
+            predicted_cols = [c.predict() for c in prev_cols]
+
+            # 4. segment current image
+            labels = curr_dish.segment(predicted_cols)
+
+            # 5. convert segments into colonies
+            detected_blobs = []
+            centroids, radii = Colony.convert_segments_to_colonies(labels)
+
+            for (x, y), r in zip(centroids, radii):
+                detected_blobs.append(cv.KeyPoint(
+                    x = float(x),
+                    y = float(y),
+                    size = float(r*2)
+                ))
+
+            # 6. building trees and assigning candidates
+            # 6.1 make candidate pairs using KDTree (prev_blobs x curr_blobs) (replacement of hungarian)
+            n, m = len(predicted_cols), len(detected_blobs)
+            matches = []
+
+            if n > 0 and m > 0:
+
+                det_centroids = np.array([b.pt for b in detected_blobs])
+
+                tree = KDTree(det_centroids)
+
+                candidate_pairs = []
+
+                # distance gating
+                for i, pred_col in enumerate(predicted_cols):
+
+                    neighbors = tree.query_ball_point(pred_col.centroid, distance_threshold)
+
+                    for j in neighbors:
+
+                        cost = cost_function(pred_col, detected_blobs[j])
+
+                        if cost < detection_threshold:
+                            candidate_pairs.append((cost, i, j))
+
+                # sorting (lowest cost first)
+                candidate_pairs.sort()
+
+                used_pred = set()
+                used_det = set()
+
+                for cost, i, j in candidate_pairs:
+
+                    if i not in used_pred and j not in used_det:
+                        matches.append((i, j))
+                        used_pred.add(i)
+                        used_det.add(j)
+
+            # 6.2. assignment
+            matched_pred = [predicted_cols[r] for r, _ in matches]
+            matched_det = [detected_blobs[c] for _, c in matches]
+
+            matched_pred_idx = {r for r, _ in matches}
+            matched_det_idx = {c for _, c in matches}
+
+            unmatched_pred = [predicted_cols[i] for i in range(n) if i not in matched_pred_idx] # colonies that disappeared
+            unmatched_det = [detected_blobs[j] for j in range(m) if j not in matched_det_idx] # colonies that newly appeared
+
+            # 7. handling 3 possible states and updating kalman
+            # 7.1. link matched colonies
+            for pred_col, det_blob in zip(matched_pred, matched_det):
+                measured_radius = float(det_blob.size / 2)
+                measured_centroid = det_blob.pt
+
+                # update Kalman filter with new measurement
+                pred_col.update(measured_centroid, measured_radius)
+
+                if pred_col.age >= 3:
+                    pred_col.state = "perm"
+
+                curr_dish.colonies.append(pred_col)
+
+
+            # 7.2. newly lost colony handling
+            for pred_col in unmatched_pred:
+                if pred_col.radius >= min_lost_radius and pred_col.state == "perm":
+                    pred_col.state = "lost"
+                    curr_dish.colonies.append(pred_col)
+
+            # 7.3. add new colonies
+            for blob in unmatched_det:
+                new_radius = float(blob.size / 2)
+                new_centroid = blob.pt
+
+                colony = Colony(
+                    centroid=(int(new_centroid[0]), int(new_centroid[1])),
+                    radius=new_radius,
+                    label=self.get_new_label(),
+                    state="temp",
+                    age=1,
+                    expansion_rate=0.0
+                )
+
+                curr_dish.colonies.append(colony)
+
+            # 8. update dish count and draw tracked colonies
+            curr_dish.count = len(curr_dish.colonies)
+
+            curr_dish.draw_tracked_colonies(verbosity=verbosity)
+
+            return curr_dish
+
+        # iteratation over [1:] frames with worker
+        for n in tqdm(range(1, len(self.frames)), desc="Tracking colonies"):
+
+            prev_frame = self.frames[n - 1]
+            curr_frame = self.frames[n]
+
+            with ThreadPoolExecutor() as ex:
+
+                list(ex.map(
+                    _detect_worker,
+                    prev_frame.dishes,
+                    curr_frame.dishes,
+                    repeat(distance_threshold),
+                    repeat(detection_threshold),
+                    repeat(min_lost_radius),
+                    repeat(cost_function),
+                    repeat(verbosity)
+                ))
+
 
     def export_images(self, save_path: str | Path = ""):
         """

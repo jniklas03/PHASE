@@ -3,7 +3,12 @@ from dataclasses import dataclass, field
 import cv2 as cv
 import numpy as np
 import warnings
-from pathlib import Path
+
+from scipy import ndimage as ndi
+from skimage.segmentation import watershed, find_boundaries
+from scipy.ndimage import gaussian_filter
+from skimage.feature import peak_local_max
+from skimage.morphology import h_maxima
 
 from ..helpers.inputs import read_img, Image
 from .colony import Colony
@@ -376,3 +381,33 @@ class Dish:
         output = cv.drawKeypoints(raw_img, blobs, np.array([]), (0,255,0), cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS) # Output = initial image with colonies marked
 
         return blobs, output
+    
+    def segment(self, predicted_cols: Colony = None):
+        img = self.preprocessed.load()
+        marker_id = 1
+
+        distance = ndi.distance_transform_edt(img)
+        distance_smooth = gaussian_filter(distance, sigma=1)
+
+        markers = np.zeros(img.shape, dtype=int)
+
+        if predicted_cols is not None and len(predicted_cols) > 0:
+            for col in predicted_cols:
+                x,y = col.centroid
+                if 0 <= int(y) < markers.shape[0] and 0 <= int(x) < markers.shape[1]:
+                    markers[int(y), int(x)] = marker_id
+                    marker_id += 1
+
+        h_maxima_mask = h_maxima(distance_smooth, 1)
+        new_labels, num_new = ndi.label(h_maxima_mask)
+        for lab in range(1, num_new+1):
+            mask = new_labels == lab
+            y, x = ndi.center_of_mass(mask)
+            if markers[int(y), int(x)] == 0:  # only if not already assigned
+                markers[int(y), int(x)] = marker_id
+                marker_id += 1
+
+        mask = (self.preprocessed.load() > 0).astype(int)
+        labels = watershed(-distance_smooth, markers, mask=mask)
+
+        return labels

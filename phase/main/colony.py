@@ -3,71 +3,103 @@ from dataclasses import dataclass, field
 import numpy as np
 import math
 from enum import Enum
+from scipy import ndimage as ndi
 
 @dataclass
 class Colony:
     centroid: tuple[int, int]
     radius: float
     label: int
+    expansion_rate: float = 0.0
     state: str = "temp"
     age: int = 1
-    expansion_rate: float = 0.0
 
-    # Kalman filter fields
-    kf_centroid: np.ndarray = field(init=False)
-    kf_radius: float = field(init=False)
-    kf_expansion_rate: float = field(init=False)
-    P: np.ndarray = field(default_factory=lambda: np.eye(4))  # covariance for [x, y, radius, expansion_rate]
-    Q: np.ndarray = field(default_factory=lambda: np.diag([0.05, 0.05, 0.2, 0.02]))  # process noise
-    R: np.ndarray = field(default_factory=lambda: np.diag([0.4, 0.4, 0.02, 0.05]))  # measurement noise
+    # Kalman state vector [x, y, vx, vy, r, vr]
+    x: np.ndarray = field(init=False)
+
+    # Covariance
+    P: np.ndarray = field(default_factory=lambda: np.diag([1, 1, 5, 5, 1, 2]))
+
+    # Process noise
+    Q: np.ndarray = field(default_factory=lambda: np.diag([0.05, 0.05, 0.2, 0.2, 0.1, 0.05]))
+
+    # Measurement noise
+    R: np.ndarray = field(default_factory=lambda: np.diag([0.5, 0.5, 0.3]))
 
     def __post_init__(self):
-        self.kf_centroid = np.array(self.centroid, dtype=float)
-        self.kf_radius = self.radius
-        self.kf_expansion_rate = self.expansion_rate
 
-    def kalman_predict(self):
-        """
-        Predict next state:
-        - radius grows by expansion_rate
-        - centroid assumed stationary
-        - uncertainty grows by process noise Q
-        """
-        self.kf_radius += self.kf_expansion_rate
-        self.P += self.Q
+        # state vector
+        self.x = np.array([
+            self.centroid[0],
+            self.centroid[1],
+            0.0,                     # vx
+            0.0,                     # vy
+            self.radius,
+            self.expansion_rate      # vr
+        ], dtype=float)
 
-    def kalman_update(self, measured_radius: float, measured_centroid: tuple[int, int]):
-        """
-        Update state using measurements:
-        - measured_radius: detected radius
-        - measured_centroid: detected centroid
-        - expansion_rate is smoothed implicitly
-        """
-        # measurement vector: [x, y, radius, dr]
-        dr_measure = measured_radius - self.kf_radius
-        z = np.array([measured_centroid[0], measured_centroid[1], measured_radius, dr_measure])
 
-        # predicted state vector
-        x_pred = np.array([self.kf_centroid[0], self.kf_centroid[1], self.kf_radius, self.kf_expansion_rate])
+    def predict(self, dt: float = 1.0) -> Colony:
+        # state transition matrix
+        F = np.array([
+            [1,0,dt,0,0,0],
+            [0,1,0,dt,0,0],
+            [0,0,1,0,0,0],
+            [0,0,0,1,0,0],
+            [0,0,0,0,1,dt],
+            [0,0,0,0,0,1]
+        ])
 
-        # Kalman gain
-        S = self.P + self.R
-        K = self.P @ np.linalg.inv(S)
+        x_pred = F @ self.x
+        P_pred = F @ self.P @ F.T + self.Q
 
-        # state update
-        x_new = x_pred + K @ (z - x_pred)
+        new_col = Colony(
+            centroid=(int(x_pred[0]), int(x_pred[1])),
+            radius=float(x_pred[4]),
+            label=self.label,
+            expansion_rate=float(x_pred[5]),
+            state=self.state,
+            age=self.age
+        )
 
-        self.kf_centroid = x_new[:2]
-        self.kf_radius = x_new[2]
-        self.kf_expansion_rate = x_new[3]
+        new_col.x = x_pred
+        new_col.P = P_pred
+        new_col.Q = self.Q
+        new_col.R = self.R
 
-        # covariance update
-        self.P = (np.eye(4) - K) @ self.P
+        return new_col
 
-        # sync standard attributes
-        self.centroid = tuple(self.kf_centroid)
-        self.radius = self.kf_radius
-        self.expansion_rate = self.kf_expansion_rate
+    def update(self, measured_centroid, measured_radius):
+
+        z = np.array([
+            measured_centroid[0],
+            measured_centroid[1],
+            measured_radius
+        ])
+
+        # measurement matrix
+        H = np.array([
+            [1,0,0,0,0,0],
+            [0,1,0,0,0,0],
+            [0,0,0,0,1,0]
+        ])
+
+        y = z - H @ self.x
+
+        S = H @ self.P @ H.T + self.R
+        K = self.P @ H.T @ np.linalg.inv(S)
+
+        self.x = self.x + K @ y
+
+        I = np.eye(len(self.x))
+        self.P = (I - K @ H) @ self.P
+
+        # sync public attributes
+        self.centroid = (int(self.x[0]), int(self.x[1]))
+        self.radius = float(self.x[4])
+        self.expansion_rate = float(self.x[5])
+
+        self.age += 1
 
     @staticmethod
     def cost_function_iou_circle(prev_colony: Colony, curr_blob) -> float:
@@ -137,6 +169,25 @@ class Colony:
         cost = np.sqrt((px - cx)**2 + (py - cy)**2)
 
         return cost
+    
+    @staticmethod
+    def convert_segments_to_colonies(labels):
+        centroids = []
+        radii = []
+
+        unique_labels = np.unique(labels)
+        unique_labels = unique_labels[unique_labels != 0]
+
+        for lab in unique_labels:
+            mask = labels == lab
+            y, x = ndi.center_of_mass(mask)
+            area = np.sum(mask)
+            radius = np.sqrt(area / np.pi)
+
+            centroids.append((x,y))
+            radii.append(radius)
+
+        return centroids, radii
 
 class CostFunction(Enum):
     IOU_CIRCLE = staticmethod(Colony.cost_function_iou_circle)
