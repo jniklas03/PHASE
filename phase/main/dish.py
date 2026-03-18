@@ -8,6 +8,7 @@ from scipy import ndimage as ndi
 from skimage.segmentation import watershed, find_boundaries
 from scipy.ndimage import gaussian_filter
 from skimage.feature import peak_local_max
+from skimage.draw import disk
 from skimage.morphology import h_maxima
 
 from ..helpers.inputs import read_img, Image
@@ -367,13 +368,13 @@ class Dish:
         params.blobColor = 255 # Detects white colonies
 
         params.filterByCircularity = True # how much does the geometrical shape fit the form of a circle
-        params.minCircularity = 0.1
+        params.minCircularity = 0.3
 
         params.filterByConvexity = True # "fullness" of the circle; think of a pie chart
         params.minConvexity = 0.7
 
         params.filterByInertia = True # how elongated is the circle - lower values mean more elongated.
-        params.minInertiaRatio = 0.1
+        params.minInertiaRatio = 0.3
 
         detector = cv.SimpleBlobDetector_create(params) # Creates detector object
         blobs = detector.detect(img) # Blobs are markers around colonies
@@ -382,32 +383,45 @@ class Dish:
 
         return blobs, output
     
-    def segment(self, predicted_cols: Colony = None):
+    def segment(self,
+                predicted_cols: list[Colony] = None,
+                sigma = 3,
+                h = 0.5,
+                get_new_label = None
+                ):
         img = self.preprocessed.load()
-        marker_id = 1
 
+        # generating distance maps
         distance = ndi.distance_transform_edt(img)
-        distance_smooth = gaussian_filter(distance, sigma=1)
+        distance_smooth = gaussian_filter(distance, sigma)
+        h_maxima_mask = h_maxima(distance_smooth, h)
 
         markers = np.zeros(img.shape, dtype=int)
 
+        # generating markers
         if predicted_cols is not None and len(predicted_cols) > 0:
             for col in predicted_cols:
-                x,y = col.centroid
-                if 0 <= int(y) < markers.shape[0] and 0 <= int(x) < markers.shape[1]:
-                    markers[int(y), int(x)] = marker_id
-                    marker_id += 1
+                x, y = col.centroid
+                r =  col.radius * 0.5
 
-        h_maxima_mask = h_maxima(distance_smooth, 1)
-        new_labels, num_new = ndi.label(h_maxima_mask)
-        for lab in range(1, num_new+1):
+                rr, cc = disk((y, x), r, shape=markers.shape)
+
+                markers[rr, cc] = col.label
+
+        # discovery
+        new_labels, n_new_labels = ndi.label(h_maxima_mask)
+
+        for lab in range(1, n_new_labels+1):
             mask = new_labels == lab
             y, x = ndi.center_of_mass(mask)
-            if markers[int(y), int(x)] == 0:  # only if not already assigned
-                markers[int(y), int(x)] = marker_id
-                marker_id += 1
 
-        mask = (self.preprocessed.load() > 0).astype(int)
-        labels = watershed(-distance_smooth, markers, mask=mask)
+            # ensures marker isn't already generated
+            if markers[int(y), int(x)] == 0:
+                r = max(1, np.sqrt(np.sum(mask)/np.pi) * 0.5)  # optional: radius based on area
+                rr, cc = disk((y, x), r, shape=markers.shape)
+                markers[int(y), int(x)] = get_new_label
+
+        mask = (img > 0).astype(int)
+        labels = watershed(-distance_smooth, markers)
 
         return labels
