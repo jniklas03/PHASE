@@ -368,13 +368,13 @@ class Dish:
         params.blobColor = 255 # Detects white colonies
 
         params.filterByCircularity = True # how much does the geometrical shape fit the form of a circle
-        params.minCircularity = 0.3
+        params.minCircularity = 0.1
 
         params.filterByConvexity = True # "fullness" of the circle; think of a pie chart
         params.minConvexity = 0.7
 
         params.filterByInertia = True # how elongated is the circle - lower values mean more elongated.
-        params.minInertiaRatio = 0.3
+        params.minInertiaRatio = 0.1
 
         detector = cv.SimpleBlobDetector_create(params) # Creates detector object
         blobs = detector.detect(img) # Blobs are markers around colonies
