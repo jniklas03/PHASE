@@ -13,6 +13,7 @@ class Colony:
     expansion_rate: float = 0.0
     state: str = "temp"
     age: int = 1
+    missed_frames: int = 0
 
     # Kalman state vector [x, y, vx, vy, r, vr]
     x: np.ndarray = field(init=False)
@@ -59,7 +60,8 @@ class Colony:
             label=self.label,
             expansion_rate=float(x_pred[5]),
             state=self.state,
-            age=self.age+1
+            age=self.age+1,
+            missed_frames=self.missed_frames
         )
 
         new_col.x = x_pred
