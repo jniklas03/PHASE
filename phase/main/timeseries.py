@@ -486,6 +486,7 @@ class Timeseries:
                 cost_function = cost_function,
                 verbosity = verbosity
                 ) -> Dish:
+            
             # 2. init prev and current colonies for dish pairs
             prev_cols = prev_dish.colonies
             curr_dish.colonies = []
@@ -494,7 +495,7 @@ class Timeseries:
             predicted_cols = [c.predict() for c in prev_cols]
 
             # 4. segment current image
-            labels = curr_dish.segment(predicted_cols)
+            labels = curr_dish.segment(predicted_cols, get_new_label=self.get_new_label())
 
             # 5. convert segments into colonies
             detected_blobs = []
@@ -599,13 +600,12 @@ class Timeseries:
 
             return curr_dish
 
-        # iteratation over [1:] frames with worker
-        for n in tqdm(range(1, len(self.frames)), desc="Tracking colonies"):
+        # 9. iteratation over [1:] frames with worker
+        with ThreadPoolExecutor() as ex:
+            for n in tqdm(range(1, len(self.frames)), desc="Tracking colonies"):
 
-            prev_frame = self.frames[n - 1]
-            curr_frame = self.frames[n]
-
-            with ThreadPoolExecutor() as ex:
+                prev_frame = self.frames[n - 1]
+                curr_frame = self.frames[n]
 
                 list(ex.map(
                     _detect_worker,
