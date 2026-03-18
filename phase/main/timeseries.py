@@ -11,6 +11,7 @@ import matplotlib.cm as cm
 from concurrent.futures import ThreadPoolExecutor
 from scipy.spatial import KDTree
 from itertools import repeat
+from collections import defaultdict
 
 from .frame import Frame
 from .colony import Colony, CostFunction
@@ -494,19 +495,8 @@ class Timeseries:
             # 3. predict colony states
             predicted_cols = [c.predict() for c in prev_cols]
 
-            # 4. segment current image
-            labels = curr_dish.segment(predicted_cols, get_new_label=self.get_new_label())
-
-            # 5. convert segments into colonies
-            detected_blobs = []
-            centroids, radii = Colony.convert_segments_to_colonies(labels)
-
-            for (x, y), r in zip(centroids, radii):
-                detected_blobs.append(cv.KeyPoint(
-                    x = float(x),
-                    y = float(y),
-                    size = float(r*2)
-                ))
+            # 4. detect current image
+            detected_blobs = curr_dish.detect_colonies()
 
             # 6. building trees and assigning candidates
             # 6.1 make candidate pairs using KDTree (prev_blobs x curr_blobs) (replacement of hungarian)
@@ -536,6 +526,25 @@ class Timeseries:
                 # sorting (lowest cost first)
                 candidate_pairs.sort()
 
+                # !! merge detection
+                det_to_preds_candidates = defaultdict(list)
+
+                for cost, i, j in candidate_pairs:
+                        det_to_preds_candidates[j].append(i)
+
+                merge_det_indices = {
+                    j for j, preds in det_to_preds_candidates.items()
+                    if len(preds) > 1
+                }
+
+                filtered_candidates = [
+                    (cost, i, j)
+                    for cost, i, j in candidate_pairs
+                    if j not in merge_det_indices
+                ]
+
+                candidate_pairs = filtered_candidates
+
                 used_pred = set()
                 used_det = set()
 
@@ -564,6 +573,7 @@ class Timeseries:
 
                 # update Kalman filter with new measurement
                 pred_col.update(measured_centroid, measured_radius)
+                pred_col.missed_frames = 0
 
                 if pred_col.age >= 3:
                     pred_col.state = "perm"
@@ -573,9 +583,13 @@ class Timeseries:
 
             # 7.2. newly lost colony handling
             for pred_col in unmatched_pred:
-                if pred_col.radius >= min_lost_radius and pred_col.state == "perm":
+                pred_col.missed_frames += 1
+                if pred_col.radius >= min_lost_radius and pred_col.state == "perm" and pred_col.missed_frames <=3:
                     pred_col.state = "lost"
                     curr_dish.colonies.append(pred_col)
+                else:
+                    # deletes track if missing too long
+                    pass
 
             # 7.3. add new colonies
             for blob in unmatched_det:
@@ -588,7 +602,8 @@ class Timeseries:
                     label=self.get_new_label(),
                     state="temp",
                     age=1,
-                    expansion_rate=0.0
+                    expansion_rate=0.0,
+                    missed_frames=0
                 )
 
                 curr_dish.colonies.append(colony)
