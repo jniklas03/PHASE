@@ -59,7 +59,7 @@ class Colony:
             label=self.label,
             expansion_rate=float(x_pred[5]),
             state=self.state,
-            age=self.age
+            age=self.age+1
         )
 
         new_col.x = x_pred
@@ -99,7 +99,6 @@ class Colony:
         self.radius = float(self.x[4])
         self.expansion_rate = float(self.x[5])
 
-        self.age += 1
 
     @staticmethod
     def cost_function_iou_circle(prev_colony: Colony, curr_blob) -> float:
