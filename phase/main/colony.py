@@ -40,7 +40,7 @@ class Colony:
         ], dtype=float)
 
 
-    def predict(self, dt: float = 1.0) -> Colony:
+    def predict(self, dt: float) -> Colony:
         # state transition matrix
         F = np.array([
             [1,0,dt,0,0,0],
