@@ -3,7 +3,13 @@ from dataclasses import dataclass, field
 import cv2 as cv
 import numpy as np
 import warnings
-from pathlib import Path
+
+from scipy import ndimage as ndi
+from skimage.segmentation import watershed, find_boundaries
+from scipy.ndimage import gaussian_filter
+from skimage.feature import peak_local_max
+from skimage.draw import disk
+from skimage.morphology import h_maxima
 
 from ..helpers.inputs import read_img, Image
 from .colony import Colony
@@ -376,3 +382,46 @@ class Dish:
         output = cv.drawKeypoints(raw_img, blobs, np.array([]), (0,255,0), cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS) # Output = initial image with colonies marked
 
         return blobs, output
+    
+    def segment(self,
+                predicted_cols: list[Colony] = None,
+                sigma = 3,
+                h = 0.5,
+                get_new_label = None
+                ):
+        img = self.preprocessed.load()
+
+        # generating distance maps
+        distance = ndi.distance_transform_edt(img)
+        distance_smooth = gaussian_filter(distance, sigma)
+        h_maxima_mask = h_maxima(distance_smooth, h)
+
+        markers = np.zeros(img.shape, dtype=int)
+
+        # generating markers
+        if predicted_cols is not None and len(predicted_cols) > 0:
+            for col in predicted_cols:
+                x, y = col.centroid
+                r =  col.radius * 0.5
+
+                rr, cc = disk((y, x), r, shape=markers.shape)
+
+                markers[rr, cc] = col.label
+
+        # discovery
+        new_labels, n_new_labels = ndi.label(h_maxima_mask)
+
+        for lab in range(1, n_new_labels+1):
+            mask = new_labels == lab
+            y, x = ndi.center_of_mass(mask)
+
+            # ensures marker isn't already generated
+            if markers[int(y), int(x)] == 0:
+                r = max(1, np.sqrt(np.sum(mask)/np.pi) * 0.5)  # optional: radius based on area
+                rr, cc = disk((y, x), r, shape=markers.shape)
+                markers[int(y), int(x)] = get_new_label
+
+        mask = (img > 0).astype(int)
+        labels = watershed(-distance_smooth, markers)
+
+        return labels
