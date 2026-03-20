@@ -9,5 +9,7 @@ if __name__ == "__main__":
     r1.execute_run(
         directory=DIR,
         save_path=SAVE_DIR,
-        max_images=50
+        clip=80,
+        clamp=120,
+        detection_threshold=0.6
     )
