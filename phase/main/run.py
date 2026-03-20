@@ -30,12 +30,14 @@ class Run:
             use_bg_mask=True,
             use_fg_mask=True,
             use_area_filter=False,
-            detection_threshold=0.99,
+            detection_threshold=0.5,
             distance_threshold=10,
             min_lost_radius=2,
             cost_function: CostFunction = CostFunction.IOU_CIRCLE,
             verbosity=0,
             save_path: str | Path = "",
+            clip: int | float | None = None,
+            clamp: int | float | None = None,
             max_images: int | None = None,
             sample_fraction: float | None = None
         ):
@@ -48,7 +50,7 @@ class Run:
             if item.is_dir():
                 save_dir = (save_path / item.name)
                 save_dir.mkdir(parents=True, exist_ok=True)
-                ts = Timeseries.from_directory(f"{item.name}", item, max_images, sample_fraction)
+                ts = Timeseries.from_directory(f"{item.name}", item, clip, clamp, max_images, sample_fraction)
                 ts.generate_dishes_timeseries(use_stencil=use_stencil)
                 ts.preprocess_timeseries(use_bg_mask=use_bg_mask, use_fg_mask=use_fg_mask, use_area_filter=use_area_filter)
                 ts.detect_timeseries(detection_threshold=detection_threshold, distance_threshold=distance_threshold, min_lost_radius=min_lost_radius, cost_function=cost_function, verbosity=verbosity)
@@ -59,6 +61,7 @@ class Run:
 
                 ts.export_images(save_path=save_dir)
                 ts.plot_counts(save_path=save_dir)
+                ts.export_gif(fps=60, save_path=save_dir)
                 ts.delete()
                 del ts
         
