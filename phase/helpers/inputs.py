@@ -67,24 +67,6 @@ def read_time(filename):
     return datetime(year, month, day, hour, minute, second)
 
 def read_image_paths(directory):
-    """
-    Extracts all image files (.jpg, .jpeg, .png) from a given directory.
-    For ease of use in pipelines that depend on multiple image files.
-
-    Returns full image paths as well as base names.
-
-    Parameters
-    ----------
-    directory: str
-        String of a directory.
-
-    Returns
-    -------
-    list
-        List of full image paths.
-    list
-        List of base names of images.
-    """
     directory = Path(directory)
 
     if not directory.is_dir():
@@ -92,13 +74,15 @@ def read_image_paths(directory):
     
     valid_extensions = {".jpg", ".jpeg", ".png"}
     
-    image_paths = []
-    base_names = []
+    image_paths = [
+        item for item in directory.iterdir()
+        if item.is_file() and item.suffix.lower() in valid_extensions
+    ]
 
-    for item in sorted(directory.iterdir()): # sorts all entries from given directory
-        if item.is_file() and item.suffix.lower() in valid_extensions:
-            image_paths.append(item)
-            base_names.append(item.stem)
+    # sort using your read_time function
+    image_paths = sorted(image_paths, key=lambda p: read_time(str(p)))
+
+    base_names = [item.stem for item in image_paths]
 
     return image_paths, base_names
 
