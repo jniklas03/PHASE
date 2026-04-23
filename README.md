@@ -1,5 +1,8 @@
 # PHASE: Phenotypic Analysis of Starvation Events
 This repo contains an image-processing and tracking pipeline written in Python, based on openCV, developed to analyse colony growth dynamics in carbon starved _E. coli_.
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/64c29749-6281-4476-bc31-5441be814f5b" height="500"/>
+</p>
 
 ## Theory
 
@@ -9,13 +12,11 @@ _E. coli_ in carbon starvation can exhibit death dynamics resembling those of he
 </p>
 In order to analyse these characteristics further, regrowth dynamics were analysed. I.e. starving bacteria were reintroduced to nutrients, imaged, and features were extracted.
 This allowed for single colony resolution, which prevented averaging over potentially heterogenous subpopulations.
-<table>
-  <tr>
-    <td><img src="https://github.com/user-attachments/assets/64c29749-6281-4476-bc31-5441be814f5b" height="600"/></td>
-    <td><img src="https://github.com/user-attachments/assets/2ee77b56-ee07-4b65-b012-cb012990a393" height="300"/></td>
-    <td><img src="https://github.com/user-attachments/assets/a9b8093e-b772-4178-b61c-4da8ed287cd5" height="300"/></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/2ee77b56-ee07-4b65-b012-cb012990a393" height="300" style="margin: 0 10px;"/>
+  <img src="https://github.com/user-attachments/assets/a9b8093e-b772-4178-b61c-4da8ed287cd5" height="300"/>
+</p>
+
 
 ## Pipeline overview
 The pipeline is centered around Kalman-filter-based tracking instead of naive per-frame detection in order to better deal with noise and colony merges. Additionally, it takes advantage of biological constraints and uses greedy spatial matching via KDTrees instead of exhaustive matching. To further stay performant, the parallelisation is employed for most of its processing steps.
