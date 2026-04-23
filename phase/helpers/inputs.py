@@ -1,4 +1,6 @@
-import cv2 as cv, numpy as np, os
+import cv2 as cv
+import numpy as np
+import os
 import re
 from pypdf import PdfReader
 from datetime import datetime
@@ -162,6 +164,9 @@ def show_image(
 
 @dataclass
 class Image:
+    """
+    Class for caching images.
+    """
     path: Path
     def __init__(self, source: np.ndarray | str | Path):
         TMP_DIR.mkdir(exist_ok=True)
@@ -210,29 +215,3 @@ class Image:
 
     def export(self, path: Path):
         cv.imwrite(str(path), self.load())
-
-def create_circular_mask(img, centroid, radius):
-        x, y = centroid
-
-        # Bounding box coordinates, clip to image size
-        x0 = max(int(x - radius), 0)
-        x1 = min(int(x + radius) + 1, img.shape[1])
-        y0 = max(int(y - radius), 0)
-        y1 = min(int(y + radius) + 1, img.shape[0])
-
-        # Crop rectangle
-        cropped = img[y0:y1, x0:x1].copy()
-
-        # Create circular mask
-        yy, xx = np.ogrid[:(y1-y0), :(x1-x0)]
-        cy, cx = y - y0, x - x0
-        mask = (xx - cx)**2 + (yy - cy)**2 <= radius**2
-
-        # Zero out pixels outside circle
-        if cropped.ndim == 2:
-            cropped[~mask] = 0
-        else:
-            for c in range(cropped.shape[2]):
-                cropped[~mask, c] = 0
-
-        return cropped, mask, x0, y0
