@@ -29,3 +29,7 @@ temp_save
 # Other
 detect_timeseries_*.py
 requirements.txt
+
+# temporarily excluding tests and synth data
+tests
+data/Synthetic

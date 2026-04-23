@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "PHASE"
-version = "0.3.0"
+version = "1.0.0"
 description = "A Python package for the image-based quantification of distinct lag phases during colony growth of carbon-starved E. coli."
 authors = ["Jakub Niklas <jakubniklas03@gmail.com>"]
 readme = "README.md"
@@ -31,6 +31,11 @@ tqdm = "4.67.3"
 scipy = "^1.17.1"
 pandas = "^3.0.1"
 scikit-image = "^0.26.0"
+scienceplots = "^2.2.1"
+imageio = {extras = ["ffmpeg"], version = "^2.37.3"}
+seaborn = "^0.13.2"
+scikit-learn = "^1.8.0"
+openpyxl = "^3.1.5"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "9.0.2"
