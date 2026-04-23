@@ -1,45 +1,129 @@
 # PHASE: Phenotypic Analysis of Starvation Events
-A Python package for the image-based quantification of distinct lag phases during colony growth of carbon-starved _E. coli_. This is a part of my Bachelors Thesis: **INSERT LINK**.
+This repo contains an image-processing and tracking pipeline written in Python, based on openCV, developed to analyse colony growth dynamics in carbon starved _E. coli_.
 
 ## Theory
 
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nam tempus, nulla ut porttitor dapibus, erat orci volutpat quam, id ornare felis nisl dapibus ipsum. Curabitur id nisi vitae lectus interdum viverra. Quisque hendrerit velit quis eleifend molestie. Sed eu metus ac leo placerat efficitur non blandit erat. Nulla ornare orci et enim eleifend venenatis. Phasellus id tempus neque. Integer at cursus enim, eu lacinia purus. Vestibulum mauris ligula, congue et ante in, convallis tristique massa. Nulla suscipit fermentum efficitur. Aenean ullamcorper, purus a condimentum venenatis, nisl elit bibendum lacus, eget fermentum tellus ex eget magna. Etiam ut lectus condimentum, consectetur nisi ut, semper justo. Aliquam vel est ligula. Cras porttitor arcu mauris, in aliquet orci tincidunt quis. Nam quis orci vel mauris rhoncus vehicula sit amet sed tellus.
+_E. coli_ in carbon starvation can exhibit death dynamics resembling those of heterogenous subpopulations (biphasic instead of monophasic).
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/e7c9f95e-c91c-4936-b38c-5749797d348c" height="300"/>
+</p>
+In order to analyse these characteristics further, regrowth dynamics were analysed. I.e. starving bacteria were reintroduced to nutrients, imaged, and features were extracted.
+This allowed for single colony resolution, which prevented averaging over potentially heterogenous subpopulations.
+<table>
+  <tr>
+    <td><img src="https://github.com/user-attachments/assets/64c29749-6281-4476-bc31-5441be814f5b" height="300"/></td>
+    <td><img src="https://github.com/user-attachments/assets/2ee77b56-ee07-4b65-b012-cb012990a393" height="300"/></td>
+    <td><img src="https://github.com/user-attachments/assets/a9b8093e-b772-4178-b61c-4da8ed287cd5" height="300"/></td>
+  </tr>
+</table>
 
-Nulla porttitor velit imperdiet nibh efficitur tincidunt. Pellentesque eget mi eros. Aenean ut vulputate magna. Vivamus at lacus rutrum, lobortis ipsum auctor, aliquam orci. Vestibulum in tristique diam. Pellentesque euismod pulvinar dictum. Fusce vel enim quis purus vulputate hendrerit ut quis tellus. Phasellus nec congue nisi. Maecenas efficitur augue ligula, sit amet placerat urna tincidunt at. In eu laoreet diam. Quisque eu dolor euismod, ornare nunc a, interdum mauris. Proin pretium lorem leo, a dictum mi porttitor nec. Fusce ornare efficitur faucibus. Integer velit risus, fermentum eu magna ut, tincidunt venenatis arcu. In porttitor malesuada ligula in eleifend.
+## Pipeline overview
+The pipeline is centered around Kalman-filter-based tracking instead of naive per-frame detection in order to better deal with noise and colony merges. Additionally, it takes advantage of biological constraints and uses greedy spatial matching via KDTrees instead of exhaustive matching. To further stay performant, the parallelisation is employed for most of its processing steps.
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/10c42164-bd70-4255-bf8f-8bec04c54e7f" height="300"/>
+</p>
 
-Donec id sem id dolor consectetur ultricies vel ac turpis. Vestibulum ex turpis, tempus nec ultrices sit amet, tincidunt eu erat. Nulla efficitur magna tortor, sed vehicula orci rutrum ut. Praesent vel tincidunt lectus. Nullam euismod, nibh vel euismod congue, leo nisi dapibus elit, eget lacinia sapien enim id nulla. Quisque sodales rutrum ipsum, nec mollis risus bibendum ac. Mauris luctus gravida augue a pellentesque. Interdum et malesuada fames ac ante ipsum primis in faucibus. Proin a velit et ipsum congue lobortis nec et nunc. Aliquam enim erat, hendrerit vitae accumsan nec, fermentum ac eros. Nunc tincidunt suscipit aliquet. Praesent at dictum risus, et volutpat est. Integer a elit ligula. Fusce iaculis bibendum maximus. Proin ornare lacus molestie arcu blandit, a euismod magna lacinia. Duis eu luctus eros, eu rhoncus tortor.
+1. **Dish Detection & Cropping**
+   - Tracking was to be done on separate dishes in order to isolate technical replicates
+   - Strong blurring and CLAHE was applied in order to only preserve dish contours
+   - Dish detection via Hough Transform
 
-Integer sit amet iaculis nisi, nec fermentum dui. Suspendisse sem dolor, commodo ut tellus vitae, scelerisque posuere nulla. Phasellus lobortis nec diam ut cursus. Donec dapibus massa eu ligula imperdiet posuere. Nullam efficitur magna at ipsum volutpat dapibus. Aenean vulputate odio eget ligula pellentesque pulvinar. Cras nisi ante, rutrum id vehicula nec, dapibus vel risus. Sed sit amet lorem dignissim, pellentesque neque eget, fringilla odio. Praesent laoreet venenatis nisi mollis tempor. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Etiam id auctor odio.
+2. **Preprocessing**
+   - Fore- and background separation for artefact removal
+   - Adaptive thresholding
 
-## Demonstration
+3. **Colony Tracking**
+   - Colony detection via blob detector
+   - Kalman filter-based tracking
+   - Greedy matching using KDTrees
+   - Handling of new/lost/merged colonies
 
-### Cropping
-The dish detection and cropping module is based on the OpenCV implementation of Hough Circle Transform. It takes an input image of `n` petri dishes and returns crops of each petri dish.<br />
-![dish_detection](https://github.com/user-attachments/assets/f779750b-5d15-4f07-99ff-20e7d450e7b7)
-
-### Preprocessing
-The preprocessing is modular. Firstly, it contains two functions for mask creation for use in timelapse pipelines, `preprocess_fg_isolation` and `preprocess_bg_isolation`. They use first and last images as ground truth for the foreground (colonies) and background (artifacts) respectively. Finally the core preprocessing function, which:
-- isolates the green channel of the input image
-- thresholds it using OpenCV's adaptive thresholding
-- filters for large artifacts using area selection using OpenCV's connected components
-- erodes to remove further noise and artefacts and to separate touching colonies
-- optionally applies the foreground and background masks<br />
-![preprocessing](https://github.com/user-attachments/assets/1031dea3-fe61-4884-a9a4-17194d918977)
-
-### Counting
-The colony detection is done using OpenCV's `BlobDetector`.
-<br />
-
-![colony_detectino](https://github.com/user-attachments/assets/de310c92-85e1-4df9-9f02-a6fb837af227)
+5. **Feature Extraction**
+   - Lag time
+   - Colony radius
+   - Expansion rate
 
 ## Installation
-Integer sit amet iaculis nisi, nec fermentum dui. Suspendisse sem dolor, commodo ut tellus vitae, scelerisque posuere nulla. Phasellus lobortis nec diam ut cursus. Donec dapibus massa eu ligula imperdiet posuere. Nullam efficitur magna at ipsum volutpat dapibus. Aenean vulputate odio eget ligula pellentesque pulvinar. Cras nisi ante, rutrum id vehicula nec, dapibus vel risus. Sed sit amet lorem dignissim, pellentesque neque eget, fringilla odio. Praesent laoreet venenatis nisi mollis tempor. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Etiam id auctor odio.
+```bash
+pip install git+https://github.com/jniklas03/PHASE/
+```
+## Usage
+Test data is provided via `phase.data.TIMELAPSE`. Exemplary usage in processing a multi-day experiment below.
 
 
 ```python
-pip install git+https://github.com/jniklas03/PHASE/
+from phase.main.timeseries import Timeseries
+from phase.helpers.inputs import Image, read_image_paths
+
+import pandas as pd
+import os
+from pathlib import Path
+
+SAVE = r"foo"
+READ = r"bar"
+
+days = os.listdir(READ)
+
+# iterating over a directory with multiple days worth of experiments
+for day in days:
+    curr_save = Path(os.path.join(SAVE, day))
+    curr_read = Path(os.path.join(READ, day))
+    os.makedirs(curr_save, exist_ok=True)
+
+    # when processing multi-day data, i.e. building multiple timeseries, clearing the cache is recommended
+    Image.clear_tmp_dir()
+
+    # creating a timeseries from directory, for each given day
+    ts = Timeseries.from_directory(
+        f"{day}",
+        curr_read,
+        clip_end=6  # leaving out the last 6 frames, due to contamination
+    )
+
+    ts.generate_dishes_timeseries()
+
+    # preprocessing the timeseries using bg- and fg-separation
+    ts.preprocess_timeseries(
+        use_bg_mask=True,
+        use_fg_mask=True,
+        )
+    
+    ts.detect_timeseries(association_threshold = 0.5, distance_threshold=10)
+
+    # extracting final counts per day for further analysis
+    counts = []
+    for i, dish in enumerate(ts.frames[-1].dishes):
+        counts.append(dish.count)
+        with open(os.path.join(curr_save, f"counts_{day}.txt"), "w") as f:
+            for c in counts:
+                f.write(f"{c}\n")
+
+    
+    # computing and saving stats as well as compound features
+    stats = ts.compute_stats()
+    stats_path = os.path.join(curr_save, f"stats_{day}.csv")
+    pd.DataFrame(stats).to_csv(stats_path, index=False)
+    _ = Timeseries.compute_features(stats, save_path=curr_save)
+
+    # exporting images, videos, and plots
+    ts.export_mp4(save_path=curr_save, fps=60)
+    ts.export_images(curr_save)
+    plot_params = ts.plot_counts(curr_save, names=["WT1R1", "WT1R2", "WT1R3", "WT2R1", "WT2R2", "WT2R3"])
+
+    # exporting fit parameters of plots
+    rows = []
+    for label, fits in plot_params.items():
+        for fit_type, params in fits.items():
+            L, k, t0 = params
+
+            rows.append({
+                "dish": label,
+                "fit_type": fit_type,
+                "L": L,
+                "k": k,
+                "t0": t0
+            })
+    df = pd.DataFrame(rows)
+    params_file_path = os.path.join(curr_save, f"fit_params_{day}.csv")
+    df.to_csv(params_file_path, index=False)
 ```
-
-## Usage
-
-Integer sit amet iaculis nisi, nec fermentum dui. Suspendisse sem dolor, commodo ut tellus vitae, scelerisque posuere nulla. Phasellus lobortis nec diam ut cursus. Donec dapibus massa eu ligula imperdiet posuere. Nullam efficitur magna at ipsum volutpat dapibus. Aenean vulputate odio eget ligula pellentesque pulvinar. Cras nisi ante, rutrum id vehicula nec, dapibus vel risus. Sed sit amet lorem dignissim, pellentesque neque eget, fringilla odio. Praesent laoreet venenatis nisi mollis tempor. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Etiam id auctor odio.
