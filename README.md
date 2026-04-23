@@ -11,7 +11,7 @@ In order to analyse these characteristics further, regrowth dynamics were analys
 This allowed for single colony resolution, which prevented averaging over potentially heterogenous subpopulations.
 <table>
   <tr>
-    <td><img src="https://github.com/user-attachments/assets/64c29749-6281-4476-bc31-5441be814f5b" height="300"/></td>
+    <td><img src="https://github.com/user-attachments/assets/64c29749-6281-4476-bc31-5441be814f5b" height="600"/></td>
     <td><img src="https://github.com/user-attachments/assets/2ee77b56-ee07-4b65-b012-cb012990a393" height="300"/></td>
     <td><img src="https://github.com/user-attachments/assets/a9b8093e-b772-4178-b61c-4da8ed287cd5" height="300"/></td>
   </tr>
