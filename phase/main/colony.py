@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 import numpy as np
 import math
 from enum import Enum
-from scipy import ndimage as ndi
 
 @dataclass
 class Colony:
@@ -22,34 +21,39 @@ class Colony:
     P: np.ndarray = field(default_factory=lambda: np.diag([1, 1, 5, 5, 1, 2]))
 
     # Process noise
-    Q: np.ndarray = field(default_factory=lambda: np.diag([0.05, 0.05, 0.2, 0.2, 0.1, 0.05]))
+    Q: np.ndarray = field(
+        default_factory=lambda: np.diag([0.05, 0.05, 0.2, 0.2, 0.1, 0.05])
+    )
 
     # Measurement noise
     R: np.ndarray = field(default_factory=lambda: np.diag([0.5, 0.5, 0.3]))
 
     def __post_init__(self):
-
         # state vector
-        self.x = np.array([
-            self.centroid[0],
-            self.centroid[1],
-            0.0,                     # vx
-            0.0,                     # vy
-            self.radius,
-            self.expansion_rate      # vr
-        ], dtype=float)
-
+        self.x = np.array(
+            [
+                self.centroid[0],
+                self.centroid[1],
+                0.0,  # vx
+                0.0,  # vy
+                self.radius,
+                self.expansion_rate,  # vr
+            ],
+            dtype=float,
+        )
 
     def predict(self, dt: float) -> Colony:
         # state transition matrix
-        F = np.array([
-            [1,0,dt,0,0,0],
-            [0,1,0,dt,0,0],
-            [0,0,1,0,0,0],
-            [0,0,0,1,0,0],
-            [0,0,0,0,1,dt],
-            [0,0,0,0,0,1]
-        ])
+        F = np.array(
+            [
+                [1, 0, dt, 0, 0, 0],
+                [0, 1, 0, dt, 0, 0],
+                [0, 0, 1, 0, 0, 0],
+                [0, 0, 0, 1, 0, 0],
+                [0, 0, 0, 0, 1, dt],
+                [0, 0, 0, 0, 0, 1],
+            ]
+        )
 
         x_pred = F @ self.x
         P_pred = F @ self.P @ F.T + self.Q
@@ -60,8 +64,8 @@ class Colony:
             label=self.label,
             expansion_rate=float(x_pred[5]),
             state=self.state,
-            age=self.age+1,
-            missed_frames=self.missed_frames
+            age=self.age + 1,
+            missed_frames=self.missed_frames,
         )
 
         new_col.x = x_pred
@@ -73,18 +77,10 @@ class Colony:
 
     def update(self, measured_centroid, measured_radius):
 
-        z = np.array([
-            measured_centroid[0],
-            measured_centroid[1],
-            measured_radius
-        ])
+        z = np.array([measured_centroid[0], measured_centroid[1], measured_radius])
 
         # measurement matrix
-        H = np.array([
-            [1,0,0,0,0,0],
-            [0,1,0,0,0,0],
-            [0,0,0,0,1,0]
-        ])
+        H = np.array([[1, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0], [0, 0, 0, 0, 1, 0]])
 
         y = z - H @ self.x
 
@@ -101,9 +97,18 @@ class Colony:
         self.radius = float(self.x[4])
         self.expansion_rate = float(self.x[5])
 
-
     @staticmethod
     def cost_function_iou_circle(prev_colony: Colony, curr_blob) -> float:
+        """
+        Intersection over union-based cost function (assumes circular form)
+
+        Args:
+            prev_colony (Colony): Colony object at t-1
+            curr_blob: Blob at t
+
+        Returns:
+            float: Cost of current assingment
+        """
         c1 = prev_colony.centroid
         r1 = prev_colony.radius
 
@@ -117,16 +122,21 @@ class Colony:
         if d >= r1 + r2:
             inter_area = 0  # no overlap
         elif d <= abs(r1 - r2):
-            inter_area = math.pi * min(r1, r2)**2  # one circle fully inside the other
+            inter_area = math.pi * min(r1, r2) ** 2  # one circle fully inside the other
         else:
             r1_sq = r1**2
             r2_sq = r2**2
 
             alpha = math.acos((d**2 + r1_sq - r2_sq) / (2 * d * r1))
-            beta  = math.acos((d**2 + r2_sq - r1_sq) / (2 * d * r2))
+            beta = math.acos((d**2 + r2_sq - r1_sq) / (2 * d * r2))
 
-            inter_area = r1_sq * alpha + r2_sq * beta - 0.5 * math.sqrt(
-                (-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2)
+            inter_area = (
+                r1_sq * alpha
+                + r2_sq * beta
+                - 0.5
+                * math.sqrt(
+                    (-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2)
+                )
             )
 
         union_area = math.pi * r1**2 + math.pi * r2**2 - inter_area
@@ -135,14 +145,36 @@ class Colony:
         cost = 1 - iou
 
         return cost
-    
+
     @staticmethod
     def cost_function_iou_box(prev_colony: Colony, curr_blob) -> float:
-        x1_min, y1_min = prev_colony.centroid[0] - prev_colony.radius, prev_colony.centroid[1] - prev_colony.radius
-        x1_max, y1_max = prev_colony.centroid[0] + prev_colony.radius, prev_colony.centroid[1] + prev_colony.radius
+        """
+        Intersection over union-based cost function (assumes rectangular form)
 
-        x2_min, y2_min = int(curr_blob.pt[0]) - int(curr_blob.size/2), int(curr_blob.pt[1]) - int(curr_blob.size/2)
-        x2_max, y2_max = int(curr_blob.pt[0]) + int(curr_blob.size/2), int(curr_blob.pt[1]) + int(curr_blob.size/2)
+        Args:
+            prev_colony (Colony): Colony object at t-1
+            curr_blob: Blob at t
+
+        Returns:
+            float: Cost of current assingment
+        """
+        x1_min, y1_min = (
+            prev_colony.centroid[0] - prev_colony.radius,
+            prev_colony.centroid[1] - prev_colony.radius,
+        )
+        x1_max, y1_max = (
+            prev_colony.centroid[0] + prev_colony.radius,
+            prev_colony.centroid[1] + prev_colony.radius,
+        )
+
+        x2_min, y2_min = (
+            int(curr_blob.pt[0]) - int(curr_blob.size / 2),
+            int(curr_blob.pt[1]) - int(curr_blob.size / 2),
+        )
+        x2_max, y2_max = (
+            int(curr_blob.pt[0]) + int(curr_blob.size / 2),
+            int(curr_blob.pt[1]) + int(curr_blob.size / 2),
+        )
 
         inter_xmin = max(x1_min, x2_min)
         inter_ymin = max(y1_min, y2_min)
@@ -161,34 +193,25 @@ class Colony:
         cost = 1 - iou
 
         return cost
-    
+
     @staticmethod
     def cost_function_distance(prev_colony: Colony, curr_blob) -> float:
+        """
+        Distance-based cost function
+
+        Args:
+            prev_colony (Colony): Colony object at t-1
+            curr_blob: Blob at t
+
+        Returns:
+            float: Cost of current assingment
+        """
         px, py = prev_colony.centroid
         cx, cy = int(curr_blob.pt[0]), int(curr_blob.pt[1])
 
-        cost = np.sqrt((px - cx)**2 + (py - cy)**2)
+        cost = np.sqrt((px - cx) ** 2 + (py - cy) ** 2)
 
         return cost
-    
-    @staticmethod
-    def convert_segments_to_colonies(labels):
-        centroids = []
-        radii = []
-
-        unique_labels = np.unique(labels)
-        unique_labels = unique_labels[unique_labels != 0]
-
-        for lab in unique_labels:
-            mask = labels == lab
-            y, x = ndi.center_of_mass(mask)
-            area = np.sum(mask)
-            radius = np.sqrt(area / np.pi)
-
-            centroids.append((x,y))
-            radii.append(radius)
-
-        return centroids, radii
 
 class CostFunction(Enum):
     IOU_CIRCLE = staticmethod(Colony.cost_function_iou_circle)
