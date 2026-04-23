@@ -40,22 +40,6 @@ class Timeseries:
         foreground masks for each dish, used for preprocessing
     bg_masks : list[np.ndarray] | None
         background masks for each dish, used for preprocessing
-
-    methods
-    -------
-    from_directory(cls, name, directory)
-        create timeseries by loading images from a directory.
-
-    load_timeseries(directory)
-        load image files from a directory into frames.
-    populate_timeseries(use_stencil=True)
-        detect and crop dishes across frames.
-    make_masks(n=5)
-        generate fg/bg masks for dishes.
-    preprocess_timeseries(use_bg_sep=True, n=5)
-        preprocess crops using masks.
-    export_debug(root="")
-        save crops, preprocessed images, and debug overlays.
     """
 
     name: str
@@ -73,20 +57,20 @@ class Timeseries:
         clip_end: int | float | None = None,
         max_images: int | None = None,
         sample_fraction: float | None = None,
-    ) -> None:
+    ) -> type["Timeseries"]:
         """
-        alternative constructor to create a timeseries from a directory
+        _Alternative constructor, for creating a timeseries from a directory_
 
-        parameters
-        ----------
-        name : str
-            name of the timeseries
-        directory : str | Path
-            path to directory containing images
+        Args:
+            name (str): _Name for the timeseries_
+            directory (str | Path): _Directory where the images are stored._
+            clip_beg (int | float | None, optional): _Amount or fraction of images in the beginning to ignore._ Defaults to None.
+            clip_end (int | float | None, optional): _Amount or fraction of images in the end to ignore._ Defaults to None.
+            max_images (int | None, optional): Amount of images to be uniformly sampled from the directory. Defaults to None.
+            sample_fraction (float | None, optional): _Fraction of images to be uniformly sampled from the directory._ Defaults to None.
 
-        returns
-        -------
-        Timeseries object
+        Returns:
+            _Timeseries_: _returns a Timeseries object_
         """
         timeseries = cls(name=name)
         timeseries.load_timeseries(
