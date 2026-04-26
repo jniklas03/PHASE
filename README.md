@@ -54,7 +54,7 @@ Test data is provided via `phase.data.TIMELAPSE`. Exemplary usage in processing 
 
 ```python
 from phase.main.timeseries import Timeseries
-from phase.helpers.inputs import Image, read_image_paths
+from phase.helpers.inputs import Image
 
 import pandas as pd
 import os
