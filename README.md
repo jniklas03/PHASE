@@ -19,7 +19,7 @@ This allowed for single colony resolution, which prevented averaging over potent
 
 
 ## Pipeline overview
-The pipeline is centered around Kalman-filter-based tracking instead of naive per-frame detection in order to better deal with noise and colony merges. Additionally, it takes advantage of biological constraints and uses greedy spatial matching via KDTrees instead of exhaustive matching. To further stay performant, the parallelisation is employed for most of its processing steps.
+The pipeline is centered around Kalman-filter-based tracking instead of naive per-frame detection in order to better deal with noise and colony merges. Additionally, it takes advantage of biological constraints and uses greedy spatial matching via KDTrees instead of exhaustive matching. To further stay performant, especially for long timelapses, out-of-core processing and parallelisation was employed.
 <p align="center">
   <img src="https://github.com/user-attachments/assets/10c42164-bd70-4255-bf8f-8bec04c54e7f" height="300"/>
 </p>
