@@ -165,7 +165,7 @@ def show_image(
 @dataclass
 class Image:
     """
-    Class for caching images.
+    Class for out-of-core handling.
     """
     path: Path
     def __init__(self, source: np.ndarray | str | Path):
